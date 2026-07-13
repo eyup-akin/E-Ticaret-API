@@ -94,6 +94,48 @@ namespace ETicaretAPI.Controllers
             }
         }
 
+        // GERÇEK KONTROL: dosyanın İÇİNE bak.
+        // Uzantı ve ContentType istemciden gelir → yalan olabilir.
+        // İlk byte'lar dosyanın kendisindedir → yalan söylenemez.
+        private static async Task<bool> GercektenResimMi(IFormFile dosya)
+        {
+            using var akis = dosya.OpenReadStream();
+
+            var baslik = new byte[12];
+            var okunan = await akis.ReadAsync(baslik, 0, 12);
+
+            if (okunan < 12)
+            {
+                return false; // 12 byte bile yoksa resim değildir
+            }
+
+            // JPEG:  FF D8 FF
+            if (baslik[0] == 0xFF && baslik[1] == 0xD8 && baslik[2] == 0xFF)
+            {
+                return true;
+            }
+
+            // PNG:  89 50 4E 47 0D 0A 1A 0A
+            if (baslik[0] == 0x89 && baslik[1] == 0x50 &&
+                baslik[2] == 0x4E && baslik[3] == 0x47)
+            {
+                return true;
+            }
+
+            // WEBP:  "RIFF" ....  "WEBP"
+            if (baslik[0] == 0x52 && baslik[1] == 0x49 &&
+                baslik[2] == 0x46 && baslik[3] == 0x46 &&
+                baslik[8] == 0x57 && baslik[9] == 0x45 &&
+                baslik[10] == 0x42 && baslik[11] == 0x50)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+
+
         // ==========================================================
         //  ÜRÜN ENDPOINT'LERİ
         // ==========================================================
@@ -270,6 +312,12 @@ namespace ETicaretAPI.Controllers
             if (!IzinliTipler.Contains(dosya.ContentType.ToLowerInvariant()))
             {
                 return BadRequest(new { mesaj = "Geçersiz dosya tipi!" });
+            }
+
+            // 5.5) İÇERİK kontrolü — uzantı ve ContentType yalan söyleyebilir, byte'lar söyleyemez
+            if (!await GercektenResimMi(dosya))
+            {
+                return BadRequest(new { mesaj = "Dosya gerçek bir resim değil!" });
             }
 
             // 6) Klasörü hazırla

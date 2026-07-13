@@ -361,3 +361,7 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+
+# Yüklenen ürün resimleri (repoya girmesin)
+**/wwwroot/uploads/

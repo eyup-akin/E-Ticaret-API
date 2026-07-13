@@ -88,6 +88,10 @@ if (app.Environment.IsDevelopment())
 // Mobil HTTP ile bağlanabilsin diye kapalı
 // app.UseHttpsRedirection();
 
+// ⭐ YENİ — wwwroot içindeki dosyaları dışarıya aç
+// Böylece http://localhost:5289/uploads/urunler/xxx.jpg çalışır
+app.UseStaticFiles();
+
 app.UseCors("AllowAll");
 
 app.UseAuthentication();  // önce: token'ı oku, kim olduğunu belirle

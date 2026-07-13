@@ -22,4 +22,8 @@
     <PackageReference Include="Microsoft.OpenApi" Version="2.10.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="wwwroot\uploads\urunler\" />
+  </ItemGroup>
+
 </Project>

@@ -8,15 +8,15 @@
         public decimal Total { get; set; }
         public string Status { get; set; } = "hazirlaniyor"; // kargo durumu
 
-        // YENİ — ödeme bilgileri
-        public string PaymentStatus { get; set; } = "beklemede"; // beklemede / odendi
-        public string CardLast4 { get; set; } = string.Empty;    // ödemede kullanılan kart (dondurulur)
+        // Ödeme bilgileri
+        public string PaymentStatus { get; set; } = "beklemede"; // beklemede / odendi / iade_edildi
+        public string CardLast4 { get; set; } = string.Empty;
 
-
-        // ⭐ YENİ — sipariş ne zaman verildi
-        // Varsayılan değer sayesinde OrdersController'da ekstra kod yazmaya gerek yok:
-        // new Order { ... } dediğin anda otomatik "şu an" yazılır.
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
+        // ⭐ YENİ — iptal bilgileri
+        // Nullable (?) çünkü iptal edilmemiş siparişlerde boş olacak.
+        public string? CancelReason { get; set; }
+        public DateTime? CancelledAt { get; set; }
     }
 }

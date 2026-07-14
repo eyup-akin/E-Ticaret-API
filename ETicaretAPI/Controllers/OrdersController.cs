@@ -237,55 +237,129 @@ namespace ETicaretAPI.Controllers
 
 
 
-
         // ==========================================================
         //  ADMIN BÖLÜMÜ
         // ==========================================================
 
-        // Kargo durumunun alabileceği DEĞERLER — WHITELIST.
-        // Dışarıdan gelen metni doğrudan veritabanına yazmıyoruz;
-        // önce "bu listemde var mı?" diye soruyoruz.
-        // Olmasaydı: {"status": "asdasd"} göndersen kaydederdi.
-        private static readonly string[] GecerliDurumlar =
+        // ⭐ DURUM MAKİNESİ
+        // Bir sipariş hangi durumdan hangi duruma geçebilir?
+        // Gerçek hayatta sipariş geri gitmez: teslim edilmiş bir sipariş
+        // tekrar "hazırlanıyor" olamaz. Bu kuralı burada tanımlıyoruz.
+        //
+        // hazirlaniyor ──→ kargoda ──→ teslim_edildi  (son)
+        //       └──────────────┴──────→ iptal          (son)
+        private static readonly Dictionary<string, string[]> GecerliGecisler =
+            new Dictionary<string, string[]>
+            {
+                ["hazirlaniyor"] = new[] { "kargoda" },
+                ["kargoda"] = new[] { "teslim_edildi" },
+                ["teslim_edildi"] = Array.Empty<string>(),  // son durum
+                ["iptal"] = Array.Empty<string>()   // son durum
+            };
+
+        // İptal, yalnızca bu durumlardayken yapılabilir
+        private static readonly string[] IptalEdilebilirDurumlar =
         {
             "hazirlaniyor",
-            "kargoda",
-            "teslim_edildi",
-            "iptal"
+            "kargoda"
         };
 
-        // 🔴 GET /api/admin/orders — TÜM siparişler (müşteri adı + tarih ile)
+        // 🔴 GET /api/admin/orders?search=&status=&paymentStatus=&page=1&pageSize=10
+        // Filtreleme ve sayfalama VERİTABANINDA yapılır.
+        // Tarayıcıya sadece o sayfadaki satırlar iner — 50.000 sipariş olsa bile.
         [Authorize(Roles = "admin")]
         [HttpGet("/api/admin/orders")]
-        public async Task<IActionResult> GetAllOrders()
+        public async Task<IActionResult> GetAllOrders(
+            [FromQuery] string? search,
+            [FromQuery] string? status,
+            [FromQuery] string? paymentStatus,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 10)
         {
-            var orders = await _context.Orders
-                .OrderByDescending(o => o.CreatedAt)
-                .Join(_context.Users,
-                      o => o.UserId,
-                      u => u.Id,
-                      (o, u) => new
-                      {
-                          id = o.Id,
-                          musteriAdi = u.FullName,
-                          musteriEmail = u.Email,
-                          tutar = o.Total,
-                          durum = o.Status,
-                          odemeDurumu = o.PaymentStatus,
-                          kartSon4 = o.CardLast4,
-                          tarih = o.CreatedAt,
+            // Güvenlik: kullanıcı pageSize=999999 yazıp sunucuyu zorlamasın
+            if (page < 1)
+            {
+                page = 1;
+            }
 
-                          // Kaç kalem ürün var (listede göstermek için yeterli)
-                          urunAdedi = _context.OrderItems.Count(oi => oi.OrderId == o.Id)
-                      })
+            if (pageSize < 1 || pageSize > 100)
+            {
+                pageSize = 10;
+            }
+
+            // Sipariş + müşteri birleşimi (tek sorgu, N+1 yok)
+            var query = from o in _context.Orders
+                        join u in _context.Users on o.UserId equals u.Id
+                        select new { o, u };
+
+            // --- FİLTRELER (hepsi SQL'e çevrilir) ---
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var arama = search.Trim();
+
+                query = query.Where(x =>
+                    x.u.FullName.Contains(arama) ||
+                    x.u.Email.Contains(arama) ||
+                    x.o.Id.ToString().Contains(arama));
+            }
+
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                query = query.Where(x => x.o.Status == status);
+            }
+
+            if (!string.IsNullOrWhiteSpace(paymentStatus))
+            {
+                query = query.Where(x => x.o.PaymentStatus == paymentStatus);
+            }
+
+            // --- TOPLAM SAYI (sayfalamadan ÖNCE) ---
+            var toplam = await query.CountAsync();
+
+            // --- FİLTREYE UYAN TÜM SİPARİŞLERİN CİROSU ---
+            // Not: sadece bu sayfanın değil, filtrenin TAMAMININ toplamı.
+            var toplamTutar = await query.SumAsync(x => (decimal?)x.o.Total) ?? 0;
+
+            // --- SAYFALAMA ---
+            var siparisler = await query
+                .OrderByDescending(x => x.o.CreatedAt)
+                .Skip((page - 1) * pageSize)   // SQL: OFFSET
+                .Take(pageSize)                // SQL: FETCH NEXT
+                .Select(x => new
+                {
+                    id = x.o.Id,
+                    musteriAdi = x.u.FullName,
+                    musteriEmail = x.u.Email,
+                    tutar = x.o.Total,
+                    durum = x.o.Status,
+                    odemeDurumu = x.o.PaymentStatus,
+                    kartSon4 = x.o.CardLast4,
+                    tarih = x.o.CreatedAt,
+
+                    // Kaç ÇEŞİT ürün (satır sayısı)
+                    urunCesidi = _context.OrderItems.Count(oi => oi.OrderId == x.o.Id),
+
+                    // Kaç ADET ürün (miktarların toplamı)
+                    toplamAdet = _context.OrderItems
+                        .Where(oi => oi.OrderId == x.o.Id)
+                        .Sum(oi => (int?)oi.Quantity) ?? 0
+                })
                 .ToListAsync();
 
-            return Ok(orders);
+            var toplamSayfa = (int)Math.Ceiling(toplam / (double)pageSize);
+
+            return Ok(new
+            {
+                siparisler = siparisler,
+                toplam = toplam,
+                toplamTutar = toplamTutar,
+                sayfa = page,
+                sayfaBoyutu = pageSize,
+                toplamSayfa = toplamSayfa
+            });
         }
 
-        // 🔴 GET /api/admin/orders/5 — sipariş detayı (admin HER siparişi görebilir)
-        // Not: /api/orders/5 endpoint'i sadece KENDİ siparişini gösterir (UserId filtresi var).
-        // Admin başkasının siparişini göreceği için ayrı bir endpoint gerekiyor.
+        // 🔴 GET /api/admin/orders/5 — sipariş detayı
         [Authorize(Roles = "admin")]
         [HttpGet("/api/admin/orders/{id}")]
         public async Task<IActionResult> GetOrderDetail(int id)
@@ -297,19 +371,16 @@ namespace ETicaretAPI.Controllers
                 return NotFound(new { mesaj = "Sipariş bulunamadı!" });
             }
 
-            // Müşteri
             var musteri = await _context.Users
                 .Where(u => u.Id == order.UserId)
                 .Select(u => new { u.Id, u.FullName, u.Email })
                 .FirstOrDefaultAsync();
 
-            // Teslimat adresi
             var adres = await _context.Addresses
                 .Where(a => a.Id == order.AddressId)
                 .Select(a => new { a.Title, a.FullAddress, a.City })
                 .FirstOrDefaultAsync();
 
-            // Sipariş kalemleri (fiyatlar SİPARİŞ ANINDAKİ fiyatlar — dondurulmuş)
             var kalemler = await _context.OrderItems
                 .Where(oi => oi.OrderId == id)
                 .Join(_context.Products,
@@ -325,7 +396,6 @@ namespace ETicaretAPI.Controllers
                       })
                 .ToListAsync();
 
-            // Ödeme kaydı
             var odeme = await _context.Payments
                 .Where(p => p.OrderId == id)
                 .Select(p => new
@@ -338,6 +408,14 @@ namespace ETicaretAPI.Controllers
                 })
                 .FirstOrDefaultAsync();
 
+            // Ön yüzün hangi butonları göstereceğini SUNUCU söylüyor.
+            // Kuralı iki yerde tutmuyoruz — tek kaynak burası.
+            var izinliGecisler = GecerliGecisler.ContainsKey(order.Status)
+                ? GecerliGecisler[order.Status]
+                : Array.Empty<string>();
+
+            var iptalEdilebilir = IptalEdilebilirDurumlar.Contains(order.Status);
+
             return Ok(new
             {
                 id = order.Id,
@@ -347,6 +425,12 @@ namespace ETicaretAPI.Controllers
                 odemeDurumu = order.PaymentStatus,
                 kartSon4 = order.CardLast4,
 
+                iptalSebebi = order.CancelReason,
+                iptalTarihi = order.CancelledAt,
+
+                izinliGecisler = izinliGecisler,
+                iptalEdilebilir = iptalEdilebilir,
+
                 musteri = musteri,
                 adres = adres,
                 kalemler = kalemler,
@@ -354,21 +438,12 @@ namespace ETicaretAPI.Controllers
             });
         }
 
-        // 🔴 PUT /api/admin/orders/5/status — kargo durumu değiştir
+        // 🔴 PUT /api/admin/orders/5/status — kargo durumunu İLERLET
         [Authorize(Roles = "admin")]
         [HttpPut("/api/admin/orders/{id}/status")]
         public async Task<IActionResult> UpdateOrderStatus(int id, [FromBody] StatusUpdateDto dto)
         {
-            // ⭐ WHITELIST KONTROLÜ — istemciden gelen metne asla güvenme
             var yeniDurum = dto.Status.Trim().ToLowerInvariant();
-
-            if (!GecerliDurumlar.Contains(yeniDurum))
-            {
-                return BadRequest(new
-                {
-                    mesaj = "Geçersiz durum! Sadece şunlar olabilir: " + string.Join(", ", GecerliDurumlar)
-                });
-            }
 
             var order = await _context.Orders.FindAsync(id);
 
@@ -377,79 +452,115 @@ namespace ETicaretAPI.Controllers
                 return NotFound(new { mesaj = "Sipariş bulunamadı!" });
             }
 
-            var eskiDurum = order.Status;
+            // ⭐ GEÇİŞ KONTROLÜ — whitelist'in gelişmiş hâli.
+            // Sadece "geçerli durum mu" değil, "BU durumdan ORAYA geçilebilir mi" diye soruyoruz.
+            var izinliler = GecerliGecisler.ContainsKey(order.Status)
+                ? GecerliGecisler[order.Status]
+                : Array.Empty<string>();
 
-            // Aynı durumsa boşuna işlem yapma
-            if (eskiDurum == yeniDurum)
+            if (!izinliler.Contains(yeniDurum))
             {
-                return Ok(new { mesaj = "Durum zaten aynı." });
+                if (izinliler.Length == 0)
+                {
+                    return BadRequest(new
+                    {
+                        mesaj = $"Bu sipariş '{order.Status}' durumunda ve artık değiştirilemez."
+                    });
+                }
+
+                return BadRequest(new
+                {
+                    mesaj = $"'{order.Status}' durumundan '{yeniDurum}' durumuna geçilemez. " +
+                            $"İzin verilen: {string.Join(", ", izinliler)}"
+                });
             }
 
-            // ⭐ STOK YÖNETİMİ
-            // Sipariş iptal edilirse stok GERİ VERİLİR.
-            // İptalden geri dönülürse stok TEKRAR DÜŞÜLÜR (yeterliyse).
-            // Bu ikisi birbirinin simetriği — biri olmadan diğeri stoğu bozar.
+            order.Status = yeniDurum;
+            await _context.SaveChangesAsync();
+
+            return Ok(new { mesaj = "Sipariş durumu güncellendi biladerim!", durum = yeniDurum });
+        }
+
+        // 🔴 PUT /api/admin/orders/5/cancel — siparişi iptal et (sebep zorunlu)
+        // Ayrı bir endpoint, çünkü iptal sadece bir "durum değişikliği" değil:
+        // stok iadesi + ödeme iadesi + sebep kaydı içeren BİLEŞİK bir işlem.
+        [Authorize(Roles = "admin")]
+        [HttpPut("/api/admin/orders/{id}/cancel")]
+        public async Task<IActionResult> CancelOrder(int id, [FromBody] OrderCancelDto dto)
+        {
+            var order = await _context.Orders.FindAsync(id);
+
+            if (order == null)
+            {
+                return NotFound(new { mesaj = "Sipariş bulunamadı!" });
+            }
+
+            if (!IptalEdilebilirDurumlar.Contains(order.Status))
+            {
+                return BadRequest(new
+                {
+                    mesaj = $"'{order.Status}' durumundaki bir sipariş iptal edilemez. " +
+                            "Yalnızca hazırlanıyor veya kargoda olan siparişler iptal edilebilir."
+                });
+            }
+
             var kalemler = await _context.OrderItems
                 .Where(oi => oi.OrderId == id)
                 .ToListAsync();
 
+            // TRANSACTION: stok iadesi + ödeme iadesi + durum değişikliği
+            // ya hep birlikte olur, ya hiç olmaz.
             using var transaction = await _context.Database.BeginTransactionAsync();
 
             try
             {
-                // DURUM 1: Normal → İptal  ⇒ stoğu geri ver
-                if (eskiDurum != "iptal" && yeniDurum == "iptal")
+                // 1) STOĞU GERİ VER
+                // Sipariş verilirken stok düşülmüştü; iptal edilince o ürünler
+                // tekrar satılabilir olmalı.
+                foreach (var kalem in kalemler)
                 {
-                    foreach (var kalem in kalemler)
-                    {
-                        var urun = await _context.Products.FindAsync(kalem.ProductId);
+                    var urun = await _context.Products.FindAsync(kalem.ProductId);
 
-                        if (urun != null)
-                        {
-                            urun.Stock += kalem.Quantity;
-                        }
+                    if (urun != null)
+                    {
+                        urun.Stock += kalem.Quantity;
                     }
                 }
 
-                // DURUM 2: İptal → Normal  ⇒ stoğu tekrar düş
-                if (eskiDurum == "iptal" && yeniDurum != "iptal")
+                // 2) ÖDEMEYİ İADE OLARAK İŞARETLE
+                // Böylece toplam gelir hesabı (Status == "basarili" toplamı)
+                // bu tutarı OTOMATİK olarak dışarıda bırakır. Ekstra kod gerekmez.
+                var odemeler = await _context.Payments
+                    .Where(p => p.OrderId == id)
+                    .ToListAsync();
+
+                foreach (var odeme in odemeler)
                 {
-                    foreach (var kalem in kalemler)
-                    {
-                        var urun = await _context.Products.FindAsync(kalem.ProductId);
-
-                        if (urun == null)
-                        {
-                            await transaction.RollbackAsync();
-                            return BadRequest(new { mesaj = "Siparişteki bir ürün artık yok, iptal geri alınamaz." });
-                        }
-
-                        if (urun.Stock < kalem.Quantity)
-                        {
-                            await transaction.RollbackAsync();
-                            return BadRequest(new
-                            {
-                                mesaj = $"'{urun.Name}' için yeterli stok yok (stok: {urun.Stock}, gereken: {kalem.Quantity}). İptal geri alınamaz."
-                            });
-                        }
-
-                        urun.Stock -= kalem.Quantity;
-                    }
+                    odeme.Status = "iade";
                 }
 
-                order.Status = yeniDurum;
+                // 3) SİPARİŞİ İPTAL ET + SEBEBİ KAYDET
+                order.Status = "iptal";
+                order.PaymentStatus = "iade_edildi";
+                order.CancelReason = dto.Reason.Trim();
+                order.CancelledAt = DateTime.UtcNow;
 
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
 
-                return Ok(new { mesaj = "Sipariş durumu güncellendi biladerim!", durum = yeniDurum });
+                return Ok(new
+                {
+                    mesaj = "Sipariş iptal edildi, stok iade edildi ve ödeme geri alındı.",
+                    durum = "iptal"
+                });
             }
             catch
             {
                 await transaction.RollbackAsync();
-                throw; // middleware yakalasın
+                throw; // global middleware yakalasın
             }
         }
+
 
 
     }

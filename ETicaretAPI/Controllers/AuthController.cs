@@ -66,6 +66,16 @@ namespace ETicaretAPI.Controllers
                 return Unauthorized(new { mesaj = "Email veya şifre hatalı biladerim!" });
             }
 
+            // 🌟 İŞTE BURAYA YAPIŞTIRIYORSUN (user yerine kullanici yazdık)
+            // PASİF KULLANICI GİRİŞ YAPAMAZ
+            if (!kullanici.IsActive)
+            {
+                return Unauthorized(new
+                {
+                    mesaj = "Hesabın devre dışı bırakılmış. Lütfen yönetici ile iletişime geç."
+                });
+            }
+
             // 3) Doğruysa token üret
             var token = _tokenService.TokenUret(kullanici);
 

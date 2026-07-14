@@ -1,8 +1,10 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 using ETicaretAPI.Data;
-
+using ETicaretAPI.Models;
+using ETicaretAPI.DTOs;
 namespace ETicaretAPI.Controllers
 {
     [Route("api/admin")]
@@ -67,6 +69,7 @@ namespace ETicaretAPI.Controllers
                 u.Email,
                 u.Role,
                 u.CreatedAt,
+                u.IsActive,
 
                 siparisSayisi = _context.Orders.Count(o => o.UserId == u.Id),
 
@@ -212,6 +215,7 @@ namespace ETicaretAPI.Controllers
                 email = user.Email,
                 rol = user.Role,
                 kayitTarihi = user.CreatedAt,
+                aktifMi = user.IsActive,
                 // ⚠️ PasswordHash ASLA gönderilmiyor
 
                 ozet = new
@@ -232,6 +236,20 @@ namespace ETicaretAPI.Controllers
                 siparisler = siparisler,
                 adresler = adresler,
                 kartlar = kartlar,
+                loglar = await _context.AuditLogs
+                    .Where(l => l.TargetUserId == id)
+                    .OrderByDescending(l => l.CreatedAt)
+                    .Take(20)
+                    .Select(l => new
+                    {
+                        l.Id,
+                        yapan = l.ActorName,
+                        islem = l.Action,
+                        eski = l.OldValue,
+                        yeni = l.NewValue,
+                        tarih = l.CreatedAt
+                    })
+                    .ToListAsync(),
                 enCokAldiklari = enCokAldiklari
             });
         }
@@ -394,5 +412,169 @@ namespace ETicaretAPI.Controllers
                 sonSiparisler = sonSiparisler
             });
         }
+
+        // ==========================================================
+        //  KULLANICI YÖNETİMİ — SADECE SÜPER ADMİN
+        // ==========================================================
+
+        // Panelden verilebilecek roller — WHITELIST.
+        // 'superadmin' bu listede YOK ve olmayacak:
+        // sistemin kök yetkisi uygulamanın içinden üretilemez (bootstrap kuralı).
+        private static readonly string[] AtanabilirRoller = { "customer", "admin" };
+
+        // İsteği yapan kişinin id'sini token'dan al
+        private int IstekYapanId()
+        {
+            return int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
+        }
+
+        // Log kaydı oluştur (kaydetmez, sadece ekler — SaveChanges çağıran sorumlu)
+        private async Task LogEkle(int hedefId, string hedefAd, string islem, string? eski, string? yeni)
+        {
+            var yapanId = IstekYapanId();
+
+            var yapan = await _context.Users
+                .Where(u => u.Id == yapanId)
+                .Select(u => u.FullName)
+                .FirstOrDefaultAsync() ?? "Bilinmeyen";
+
+            _context.AuditLogs.Add(new Models.AuditLog
+            {
+                ActorUserId = yapanId,
+                ActorName = yapan,
+                TargetUserId = hedefId,
+                TargetName = hedefAd,
+                Action = islem,
+                OldValue = eski,
+                NewValue = yeni,
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+
+        // 🟣 PUT /api/admin/users/5/role — kullanıcının rolünü değiştir
+        [Authorize(Roles = "superadmin")]  // ⭐ admin YETMEZ, süper admin şart
+        [HttpPut("users/{id}/role")]
+        public async Task<IActionResult> ChangeUserRole(int id, [FromBody] RoleUpdateDto dto)
+        {
+            var yeniRol = dto.Role.Trim().ToLowerInvariant();
+
+            // KURAL 1: Rol whitelist'ten seçilir
+            if (!AtanabilirRoller.Contains(yeniRol))
+            {
+                return BadRequest(new
+                {
+                    mesaj = "Geçersiz rol! Sadece şunlar atanabilir: " +
+                            string.Join(", ", AtanabilirRoller)
+                });
+            }
+
+            // KURAL 2: Kimse KENDİ rolünü değiştiremez
+            // (Yoksa tek süper admin kendini müşteri yapar, sisteme kimse giremez.)
+            if (id == IstekYapanId())
+            {
+                return BadRequest(new { mesaj = "Kendi rolünü değiştiremezsin!" });
+            }
+
+            var user = await _context.Users.FindAsync(id);
+
+            if (user == null)
+            {
+                return NotFound(new { mesaj = "Kullanıcı bulunamadı!" });
+            }
+
+            // KURAL 3: Süper admin'e dokunulamaz
+            if (user.Role == "superadmin")
+            {
+                return BadRequest(new
+                {
+                    mesaj = "Süper yöneticinin rolü panelden değiştirilemez."
+                });
+            }
+
+            if (user.Role == yeniRol)
+            {
+                return Ok(new { mesaj = "Kullanıcı zaten bu rolde." });
+            }
+
+            var eskiRol = user.Role;
+
+            user.Role = yeniRol;
+
+            // ⭐ DAMGAYI YENİLE — bu kişinin ELİNDEKİ TÜM TOKEN'LAR anında geçersiz olur.
+            // Yetkisi düşürülen biri, eski token'ıyla admin gibi davranamaz.
+            user.SecurityStamp = Guid.NewGuid().ToString();
+
+            await LogEkle(user.Id, user.FullName, "rol_degisti", eskiRol, yeniRol);
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                mesaj = $"{user.FullName} artık '{yeniRol}' rolünde. Mevcut oturumu sonlandırıldı.",
+                rol = yeniRol
+            });
+        }
+
+        // 🟣 PUT /api/admin/users/5/status — aktifleştir / pasifleştir
+        [Authorize(Roles = "superadmin")]
+        [HttpPut("users/{id}/status")]
+        public async Task<IActionResult> ChangeUserStatus(int id, [FromBody] StatusToggleDto dto)
+        {
+            // KURAL: Kimse kendini pasifleştiremez
+            if (id == IstekYapanId())
+            {
+                return BadRequest(new { mesaj = "Kendi hesabını devre dışı bırakamazsın!" });
+            }
+
+            var user = await _context.Users.FindAsync(id);
+
+            if (user == null)
+            {
+                return NotFound(new { mesaj = "Kullanıcı bulunamadı!" });
+            }
+
+            // KURAL: Süper admin pasifleştirilemez
+            if (user.Role == "superadmin")
+            {
+                return BadRequest(new
+                {
+                    mesaj = "Süper yönetici devre dışı bırakılamaz."
+                });
+            }
+
+            if (user.IsActive == dto.IsActive)
+            {
+                return Ok(new { mesaj = "Durum zaten aynı." });
+            }
+
+            var eski = user.IsActive ? "aktif" : "pasif";
+            var yeni = dto.IsActive ? "aktif" : "pasif";
+
+            user.IsActive = dto.IsActive;
+
+            // Pasifleştirirken damgayı yenile → anında sistemden atılır
+            if (!dto.IsActive)
+            {
+                user.SecurityStamp = Guid.NewGuid().ToString();
+            }
+
+            await LogEkle(
+                user.Id,
+                user.FullName,
+                dto.IsActive ? "aktiflestirildi" : "pasiflestirildi",
+                eski,
+                yeni);
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                mesaj = dto.IsActive
+                    ? $"{user.FullName} yeniden aktifleştirildi."
+                    : $"{user.FullName} devre dışı bırakıldı ve oturumu sonlandırıldı.",
+                aktifMi = dto.IsActive
+            });
+        }
+
     }
 }

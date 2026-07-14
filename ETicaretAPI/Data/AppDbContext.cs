@@ -22,5 +22,7 @@ namespace ETicaretAPI.Data
         public DbSet<Payment> Payments { get; set; }        // YENİ
         public DbSet<ProductImage> ProductImages { get; set; }  // YENİ
         public DbSet<Favorite> Favorites { get; set; }
+
+        public DbSet<AuditLog> AuditLogs { get; set; }  // YENİ
     }
 }

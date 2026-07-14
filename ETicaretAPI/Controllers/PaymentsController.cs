@@ -109,6 +109,9 @@ namespace ETicaretAPI.Controllers
             }
 
             // --- ÖZET (filtreye uyan TÜM kayıtlar üzerinden, sayfa değil) ---
+            // biladerim burada verileri çekmiyorum 
+            //onun yerine SQL tarafında SUM ve COUNT ile özet verileri hazır verileri çekiyorum.
+            //bu şekilde daha verimli oluyor, çünkü sayfalama yaparken sadece o sayfadaki verileri çekiyoruz.
             var brutGelir = await query
                 .Where(x => x.p.Status == "basarili")
                 .SumAsync(x => (decimal?)x.p.Amount) ?? 0;

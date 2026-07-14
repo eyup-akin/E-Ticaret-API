@@ -7,19 +7,27 @@ namespace ETicaretAPI.Middleware
     // ⭐ TOKEN BAYATLAMASINI ÇÖZEN KATMAN
     //
     // PROBLEM:
-    //   JWT "durumsuzdur" (stateless) — içindeki bilgi token üretildiği ANIN fotoğrafıdır.
-    //   Bir admin'in rolünü müşteriye düşürsen bile, elindeki eski token'da
-    //   hâlâ "role: admin" yazar. Backend token'a bakıp içeri alır. 💀
+    //   JWT durumsuzdur — içindeki bilgi, token üretildiği ANIN fotoğrafıdır.
+    //   Bir admin'in rolünü düşürsen bile elindeki eski token'da hâlâ
+    //   "role: admin" yazar. Backend token'a bakıp içeri alır. 💀
     //
     // ÇÖZÜM:
-    //   Her kullanıcının bir "güvenlik damgası" (Guid) var. Token üretilirken
-    //   içine yazılıyor. Her istekte veritabanındaki damgayla karşılaştırıyoruz.
-    //   Rol değişince damgayı YENİLİYORUZ → eski token'ların damgası tutmuyor → 401.
+    //   Her kullanıcının bir "güvenlik damgası" (Guid) var. Token'a yazılıyor.
+    //   Her istekte veritabanındaki damgayla karşılaştırıyoruz.
+    //   Rol değişince damgayı yeniliyoruz → eski token'lar tutmuyor.
     //
-    // BEDELİ:
-    //   Korumalı her istekte 1 ekstra veritabanı sorgusu. JWT'nin "durumsuzluk"
-    //   avantajından kısmen vazgeçiyoruz. Gerçek sistemlerde bu damga Redis gibi
-    //   bir önbellekte tutulur, DB'ye gidilmez. Bizim ölçeğimizde sorgu yeterli.
+    // ⚠️ ÖNEMLİ DAVRANIŞ KARARI:
+    //   Bayat token gelince isteği REDDETMİYORUZ. Bunun yerine kullanıcıyı
+    //   "MİSAFİR"E DÜŞÜRÜYORUZ (kimliği siliyoruz).
+    //
+    //   Neden? Ürün listesi gibi herkese açık endpoint'ler token OLMADAN da
+    //   çalışır. Bayat token yüzünden onları da kapatırsak, uygulamayı açan
+    //   kullanıcı bomboş bir ekran görür — misafir gezinme bile ölür.
+    //
+    //   Bu şekilde:
+    //     - Açık endpoint'ler (ürünler, kategoriler) → çalışmaya devam eder
+    //     - Korumalı endpoint'ler ([Authorize]) → 401 döner (kimlik yok çünkü)
+    //   İstemci 401'i görünce token'ı silip kullanıcıyı giriş ekranına atar.
     public class GuvenlikDamgasiMiddleware
     {
         private readonly RequestDelegate _next;
@@ -29,11 +37,8 @@ namespace ETicaretAPI.Middleware
             _next = next;
         }
 
-        // AppDbContext parametre olarak isteniyor — her istek için taze bir tane gelir
         public async Task InvokeAsync(HttpContext context, AppDbContext db)
         {
-            // Sadece token'la gelen isteklerle ilgileniyoruz.
-            // Herkese açık endpoint'ler (ürün listesi vb.) buradan hızlıca geçer.
             if (context.User?.Identity?.IsAuthenticated == true)
             {
                 var idMetni = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
@@ -48,21 +53,15 @@ namespace ETicaretAPI.Middleware
                         .FirstOrDefaultAsync();
 
                     var gecersiz =
-                        kullanici == null ||                          // kullanıcı silinmiş
-                        !kullanici.IsActive ||                        // pasifleştirilmiş
-                        kullanici.SecurityStamp != tokenDamgasi;      // damga bayatlamış
+                        kullanici == null ||                       // kullanıcı yok
+                        !kullanici.IsActive ||                     // pasifleştirilmiş
+                        kullanici.SecurityStamp != tokenDamgasi;   // damga bayat
 
                     if (gecersiz)
                     {
-                        context.Response.StatusCode = 401;
-                        context.Response.ContentType = "application/json";
-
-                        await context.Response.WriteAsJsonAsync(new
-                        {
-                            mesaj = "Oturumun geçersiz hale geldi. Lütfen tekrar giriş yap."
-                        });
-
-                        return; // isteği burada kes, controller'a gitmesin
+                        // ⭐ İsteği KESMİYORUZ — kimliği siliyoruz.
+                        // Bundan sonra bu istek "misafir" gibi işlenir.
+                        context.User = new ClaimsPrincipal(new ClaimsIdentity());
                     }
                 }
             }

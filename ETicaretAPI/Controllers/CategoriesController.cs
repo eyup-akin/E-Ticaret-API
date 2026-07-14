@@ -22,11 +22,16 @@ namespace ETicaretAPI.Controllers
         [HttpGet]
         public async Task<IActionResult> GetCategories()
         {
+            // Her kategorinin ürün sayısını da getiriyoruz.
+            // DİKKAT: Bunu tek sorguda yapıyoruz.
+            // Yanlış yol: önce kategorileri çek, sonra her biri için ayrı COUNT sorgusu at
+            // (5 kategori = 6 sorgu → "N+1 problemi"). SQL bunu tek seferde yapabilir.
             var categories = await _context.Categories
                 .Select(c => new CategoryDto
                 {
                     Id = c.Id,
-                    Name = c.Name
+                    Name = c.Name,
+                    ProductCount = _context.Products.Count(p => p.CategoryId == c.Id)
                 })
                 .ToListAsync();
 
@@ -44,7 +49,14 @@ namespace ETicaretAPI.Controllers
                 return NotFound(new { mesaj = "Kategori bulunamadı biladerim!" });
             }
 
-            return Ok(new CategoryDto { Id = category.Id, Name = category.Name });
+            var urunSayisi = await _context.Products.CountAsync(p => p.CategoryId == id);
+
+            return Ok(new CategoryDto
+            {
+                Id = category.Id,
+                Name = category.Name,
+                ProductCount = urunSayisi
+            });
         }
 
         // 🔴 POST /api/categories — sadece admin
@@ -99,6 +111,20 @@ namespace ETicaretAPI.Controllers
             if (category == null)
             {
                 return NotFound(new { mesaj = "Silinecek kategori zaten yok!" });
+            }
+
+            // ⭐ YENİ — İÇİ DOLU KATEGORİ SİLİNEMEZ
+            // Bu kategoriye bağlı ürün varsa, SQL zaten foreign key hatası fırlatırdı.
+            // Ama o hata teknik ve anlaşılmaz. Biz önden kontrol edip
+            // admin'in anlayacağı bir dille söylüyoruz.
+            var urunSayisi = await _context.Products.CountAsync(p => p.CategoryId == id);
+
+            if (urunSayisi > 0)
+            {
+                return BadRequest(new
+                {
+                    mesaj = $"Bu kategoride {urunSayisi} ürün var. Önce ürünleri başka bir kategoriye taşı veya sil."
+                });
             }
 
             _context.Categories.Remove(category);

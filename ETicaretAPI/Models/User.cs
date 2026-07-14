@@ -7,5 +7,9 @@
         public string Email { get; set; } = string.Empty;
         public string PasswordHash { get; set; } = string.Empty;
         public string Role { get; set; } = "customer"; // customer veya admin
+
+
+        // ⭐ YENİ — kullanıcı ne zaman kaydoldu
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }
 }

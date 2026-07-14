@@ -238,31 +238,57 @@ namespace ETicaretAPI.Controllers
 
 
 
-        // 🔴 GET /api/admin/orders — TÜM siparişler (admin)
+        // ==========================================================
+        //  ADMIN BÖLÜMÜ
+        // ==========================================================
+
+        // Kargo durumunun alabileceği DEĞERLER — WHITELIST.
+        // Dışarıdan gelen metni doğrudan veritabanına yazmıyoruz;
+        // önce "bu listemde var mı?" diye soruyoruz.
+        // Olmasaydı: {"status": "asdasd"} göndersen kaydederdi.
+        private static readonly string[] GecerliDurumlar =
+        {
+            "hazirlaniyor",
+            "kargoda",
+            "teslim_edildi",
+            "iptal"
+        };
+
+        // 🔴 GET /api/admin/orders — TÜM siparişler (müşteri adı + tarih ile)
         [Authorize(Roles = "admin")]
         [HttpGet("/api/admin/orders")]
         public async Task<IActionResult> GetAllOrders()
         {
             var orders = await _context.Orders
-                .OrderByDescending(o => o.Id)
-                .Select(o => new
-                {
-                    o.Id,
-                    o.UserId,
-                    o.Total,
-                    o.Status,
-                    o.PaymentStatus,
-                    o.CardLast4
-                })
+                .OrderByDescending(o => o.CreatedAt)
+                .Join(_context.Users,
+                      o => o.UserId,
+                      u => u.Id,
+                      (o, u) => new
+                      {
+                          id = o.Id,
+                          musteriAdi = u.FullName,
+                          musteriEmail = u.Email,
+                          tutar = o.Total,
+                          durum = o.Status,
+                          odemeDurumu = o.PaymentStatus,
+                          kartSon4 = o.CardLast4,
+                          tarih = o.CreatedAt,
+
+                          // Kaç kalem ürün var (listede göstermek için yeterli)
+                          urunAdedi = _context.OrderItems.Count(oi => oi.OrderId == o.Id)
+                      })
                 .ToListAsync();
 
             return Ok(orders);
         }
 
-        // 🔴 PUT /api/admin/orders/5/status — kargo durumu değiştir (admin)
+        // 🔴 GET /api/admin/orders/5 — sipariş detayı (admin HER siparişi görebilir)
+        // Not: /api/orders/5 endpoint'i sadece KENDİ siparişini gösterir (UserId filtresi var).
+        // Admin başkasının siparişini göreceği için ayrı bir endpoint gerekiyor.
         [Authorize(Roles = "admin")]
-        [HttpPut("/api/admin/orders/{id}/status")]
-        public async Task<IActionResult> UpdateOrderStatus(int id, [FromBody] StatusUpdateDto dto)
+        [HttpGet("/api/admin/orders/{id}")]
+        public async Task<IActionResult> GetOrderDetail(int id)
         {
             var order = await _context.Orders.FindAsync(id);
 
@@ -271,10 +297,158 @@ namespace ETicaretAPI.Controllers
                 return NotFound(new { mesaj = "Sipariş bulunamadı!" });
             }
 
-            order.Status = dto.Status;
-            await _context.SaveChangesAsync();
+            // Müşteri
+            var musteri = await _context.Users
+                .Where(u => u.Id == order.UserId)
+                .Select(u => new { u.Id, u.FullName, u.Email })
+                .FirstOrDefaultAsync();
 
-            return Ok(new { mesaj = $"Sipariş durumu '{dto.Status}' olarak güncellendi!" });
+            // Teslimat adresi
+            var adres = await _context.Addresses
+                .Where(a => a.Id == order.AddressId)
+                .Select(a => new { a.Title, a.FullAddress, a.City })
+                .FirstOrDefaultAsync();
+
+            // Sipariş kalemleri (fiyatlar SİPARİŞ ANINDAKİ fiyatlar — dondurulmuş)
+            var kalemler = await _context.OrderItems
+                .Where(oi => oi.OrderId == id)
+                .Join(_context.Products,
+                      oi => oi.ProductId,
+                      p => p.Id,
+                      (oi, p) => new
+                      {
+                          urunId = p.Id,
+                          urunAdi = p.Name,
+                          adet = oi.Quantity,
+                          birimFiyat = oi.UnitPrice,
+                          araToplam = oi.Quantity * oi.UnitPrice
+                      })
+                .ToListAsync();
+
+            // Ödeme kaydı
+            var odeme = await _context.Payments
+                .Where(p => p.OrderId == id)
+                .Select(p => new
+                {
+                    p.Id,
+                    tutar = p.Amount,
+                    durum = p.Status,
+                    kartSon4 = p.CardLast4,
+                    odemeTarihi = p.PaidAt
+                })
+                .FirstOrDefaultAsync();
+
+            return Ok(new
+            {
+                id = order.Id,
+                tarih = order.CreatedAt,
+                tutar = order.Total,
+                durum = order.Status,
+                odemeDurumu = order.PaymentStatus,
+                kartSon4 = order.CardLast4,
+
+                musteri = musteri,
+                adres = adres,
+                kalemler = kalemler,
+                odeme = odeme
+            });
+        }
+
+        // 🔴 PUT /api/admin/orders/5/status — kargo durumu değiştir
+        [Authorize(Roles = "admin")]
+        [HttpPut("/api/admin/orders/{id}/status")]
+        public async Task<IActionResult> UpdateOrderStatus(int id, [FromBody] StatusUpdateDto dto)
+        {
+            // ⭐ WHITELIST KONTROLÜ — istemciden gelen metne asla güvenme
+            var yeniDurum = dto.Status.Trim().ToLowerInvariant();
+
+            if (!GecerliDurumlar.Contains(yeniDurum))
+            {
+                return BadRequest(new
+                {
+                    mesaj = "Geçersiz durum! Sadece şunlar olabilir: " + string.Join(", ", GecerliDurumlar)
+                });
+            }
+
+            var order = await _context.Orders.FindAsync(id);
+
+            if (order == null)
+            {
+                return NotFound(new { mesaj = "Sipariş bulunamadı!" });
+            }
+
+            var eskiDurum = order.Status;
+
+            // Aynı durumsa boşuna işlem yapma
+            if (eskiDurum == yeniDurum)
+            {
+                return Ok(new { mesaj = "Durum zaten aynı." });
+            }
+
+            // ⭐ STOK YÖNETİMİ
+            // Sipariş iptal edilirse stok GERİ VERİLİR.
+            // İptalden geri dönülürse stok TEKRAR DÜŞÜLÜR (yeterliyse).
+            // Bu ikisi birbirinin simetriği — biri olmadan diğeri stoğu bozar.
+            var kalemler = await _context.OrderItems
+                .Where(oi => oi.OrderId == id)
+                .ToListAsync();
+
+            using var transaction = await _context.Database.BeginTransactionAsync();
+
+            try
+            {
+                // DURUM 1: Normal → İptal  ⇒ stoğu geri ver
+                if (eskiDurum != "iptal" && yeniDurum == "iptal")
+                {
+                    foreach (var kalem in kalemler)
+                    {
+                        var urun = await _context.Products.FindAsync(kalem.ProductId);
+
+                        if (urun != null)
+                        {
+                            urun.Stock += kalem.Quantity;
+                        }
+                    }
+                }
+
+                // DURUM 2: İptal → Normal  ⇒ stoğu tekrar düş
+                if (eskiDurum == "iptal" && yeniDurum != "iptal")
+                {
+                    foreach (var kalem in kalemler)
+                    {
+                        var urun = await _context.Products.FindAsync(kalem.ProductId);
+
+                        if (urun == null)
+                        {
+                            await transaction.RollbackAsync();
+                            return BadRequest(new { mesaj = "Siparişteki bir ürün artık yok, iptal geri alınamaz." });
+                        }
+
+                        if (urun.Stock < kalem.Quantity)
+                        {
+                            await transaction.RollbackAsync();
+                            return BadRequest(new
+                            {
+                                mesaj = $"'{urun.Name}' için yeterli stok yok (stok: {urun.Stock}, gereken: {kalem.Quantity}). İptal geri alınamaz."
+                            });
+                        }
+
+                        urun.Stock -= kalem.Quantity;
+                    }
+                }
+
+                order.Status = yeniDurum;
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return Ok(new { mesaj = "Sipariş durumu güncellendi biladerim!", durum = yeniDurum });
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw; // middleware yakalasın
+            }
         }
 
 

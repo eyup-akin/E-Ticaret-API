@@ -1,7 +1,10 @@
-﻿namespace ETicaretAPI.DTOs
+﻿using System.ComponentModel.DataAnnotations;
+
+namespace ETicaretAPI.DTOs
 {
     public class StatusUpdateDto
     {
-        public string Status { get; set; } = string.Empty; // hazirlaniyor / kargoda / teslim
+        [Required(ErrorMessage = "Durum boş olamaz!")]
+        public string Status { get; set; } = string.Empty;
     }
 }

@@ -90,15 +90,32 @@ namespace ETicaretAPI.Controllers
 
 
 
-        // TEST: sadece giriş yapmış kullanıcı erişebilir
+        // 🟡 GET /api/auth/ben-kimim — giriş yapan kullanıcının profili
         [Microsoft.AspNetCore.Authorization.Authorize]
         [HttpGet("ben-kimim")]
-        public IActionResult BenKimim()
+        public async Task<IActionResult> BenKimim()
         {
-            // token'dan okunan bilgiler
-            var email = User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value;
-            var rol = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
-            return Ok(new { email, rol });
+            var userId = int.Parse(
+                User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);
+
+            var kullanici = await _context.Users
+                .Where(u => u.Id == userId)
+                .Select(u => new
+                {
+                    id = u.Id,
+                    fullName = u.FullName,
+                    email = u.Email,
+                    role = u.Role,
+                    createdAt = u.CreatedAt
+                })
+                .FirstOrDefaultAsync();
+
+            if (kullanici == null)
+            {
+                return NotFound(new { mesaj = "Kullanıcı bulunamadı!" });
+            }
+
+            return Ok(kullanici);
         }
 
 

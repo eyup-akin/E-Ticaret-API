@@ -44,7 +44,13 @@ namespace ETicaretAPI.Controllers
                           ProductId = p.Id,
                           ProductName = p.Name,
                           ProductPrice = p.Price,
-                          Quantity = c.Quantity
+                          Quantity = c.Quantity,
+                          ProductImageUrl = _context.ProductImages
+                              .Where(pi => pi.ProductId == p.Id)
+                              .OrderByDescending(pi => pi.IsMain)
+                              .ThenBy(pi => pi.SortOrder)
+                              .Select(pi => pi.Url)
+                              .FirstOrDefault()
                       })
                 .ToListAsync();
 

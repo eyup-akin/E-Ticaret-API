@@ -22,5 +22,7 @@
         public double AverageRating { get; set; }
         public int ReviewCount { get; set; }
 
+        public int FavoriteCount { get; set; }   // ⭐ YENİ — kaç kişinin favorisinde
+
     }
 }

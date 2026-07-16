@@ -110,6 +110,30 @@ namespace ETicaretAPI.Controllers
         }
 
 
+        // Ürünlere favori sayısını doldurur (tek sorguda)
+        private async Task FavorileriDoldur(List<ProductDto> urunler)
+        {
+            if (urunler.Count == 0)
+            {
+                return;
+            }
+
+            var idler = urunler.Select(u => u.Id).ToList();
+
+            var sayilar = await _context.Favorites
+                .Where(f => idler.Contains(f.ProductId))
+                .GroupBy(f => f.ProductId)
+                .Select(g => new { ProductId = g.Key, Sayi = g.Count() })
+                .ToListAsync();
+
+            foreach (var urun in urunler)
+            {
+                var s = sayilar.FirstOrDefault(x => x.ProductId == urun.Id);
+                urun.FavoriteCount = s?.Sayi ?? 0;
+            }
+        }
+
+
         // Diskteki fiziksel dosyayı siler (yoksa sessizce geçer)
         private void DiskDosyasiniSil(string url)
         {
@@ -231,6 +255,8 @@ namespace ETicaretAPI.Controllers
 
             await ResimleriDoldur(new List<ProductDto> { dto });
             await PuanlariDoldur(new List<ProductDto> { dto });
+            await FavorileriDoldur(new List<ProductDto> { dto });
+
 
             return Ok(dto);
         }

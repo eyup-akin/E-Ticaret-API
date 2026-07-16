@@ -365,3 +365,7 @@ FodyWeavers.xsd
 
 # Yüklenen ürün resimleri (repoya girmesin)
 **/wwwroot/uploads/
+
+
+# Gerçek JWT anahtarı burada — repoya gitmesin
+appsettings.Development.json

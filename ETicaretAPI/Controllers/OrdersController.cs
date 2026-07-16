@@ -247,6 +247,89 @@ namespace ETicaretAPI.Controllers
 
 
 
+        // 🟡 PUT /api/orders/5/cancel — müşteri KENDİ siparişini iptal eder
+        // Admin iptaliyle aynı bileşik işlem: stok iadesi + ödeme iadesi + sebep.
+        [HttpPut("{id}/cancel")]
+        public async Task<IActionResult> CancelMyOrder(int id, [FromBody] OrderCancelDto dto)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            var userId = GetUserId();
+
+            // SADECE KENDİ siparişi — başkasının siparişini iptal edemez
+            var order = await _context.Orders
+                .FirstOrDefaultAsync(o => o.Id == id && o.UserId == userId);
+
+            if (order == null)
+            {
+                return NotFound(new { mesaj = "Sipariş bulunamadı!" });
+            }
+
+            if (!IptalEdilebilirDurumlar.Contains(order.Status))
+            {
+                return BadRequest(new
+                {
+                    mesaj = "Bu sipariş artık iptal edilemez. " +
+                            "Yalnızca hazırlanıyor veya kargoda olan siparişler iptal edilebilir."
+                });
+            }
+
+            var kalemler = await _context.OrderItems
+                .Where(oi => oi.OrderId == id)
+                .ToListAsync();
+
+            using var transaction = await _context.Database.BeginTransactionAsync();
+
+            try
+            {
+                // 1) Stoğu geri ver
+                foreach (var kalem in kalemler)
+                {
+                    var urun = await _context.Products.FindAsync(kalem.ProductId);
+                    if (urun != null)
+                    {
+                        urun.Stock += kalem.Quantity;
+                    }
+                }
+
+                // 2) Ödemeyi iade olarak işaretle (ciro hesabı bunu otomatik dışlar)
+                var odemeler = await _context.Payments
+                    .Where(p => p.OrderId == id)
+                    .ToListAsync();
+
+                foreach (var odeme in odemeler)
+                {
+                    odeme.Status = "iade";
+                }
+
+                // 3) Siparişi iptal et + sebebi kaydet
+                order.Status = "iptal";
+                order.PaymentStatus = "iade_edildi";
+                order.CancelReason = dto.Reason.Trim();
+                order.CancelledAt = DateTime.UtcNow;
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return Ok(new { mesaj = "Siparişin iptal edildi ve ödemen iade edildi.", durum = "iptal" });
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw; // global middleware yakalar
+            }
+        }
+
+
+
+
+
+
+
+
         // ==========================================================
         //  ADMIN BÖLÜMÜ
         // ==========================================================

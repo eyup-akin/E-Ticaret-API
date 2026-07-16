@@ -83,6 +83,7 @@ namespace ETicaretAPI.Controllers
             return Ok(new
             {
                 token = token,
+                id = kullanici.Id,
                 fullName = kullanici.FullName,
                 role = kullanici.Role
             });

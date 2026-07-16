@@ -24,5 +24,38 @@ namespace ETicaretAPI.Data
         public DbSet<Favorite> Favorites { get; set; }
 
         public DbSet<AuditLog> AuditLogs { get; set; }  // YENİ
+
+        public DbSet<Review> Reviews { get; set; }  // YENİ - yorumlar tablosu
+
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            base.OnModelCreating(modelBuilder);
+
+            // Bir kullanıcı bir ürüne YALNIZCA BİR yorum yapabilsin (veritabanı garantisi)
+            modelBuilder.Entity<Review>()
+                .HasIndex(r => new { r.UserId, r.ProductId })
+                .IsUnique();
+
+            // Ürün silinince yorumları da silinsin
+            modelBuilder.Entity<Review>()
+                .HasOne<Product>()
+                .WithMany()
+                .HasForeignKey(r => r.ProductId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Kullanıcı silinmiyor (soft delete) → yoruma dokunma, engelle
+            modelBuilder.Entity<Review>()
+                .HasOne<User>()
+                .WithMany()
+                .HasForeignKey(r => r.UserId)
+                .OnDelete(DeleteBehavior.Restrict);
+        }
+
+
     }
+
+
+
+
 }

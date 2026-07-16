@@ -16,5 +16,11 @@
 
         // Detay ekranında galeri için tüm resimler
         public List<ProductImageDto> Images { get; set; } = new List<ProductImageDto>();
+
+
+        // ⭐ YENİ — puan özeti (yorum yoksa ikisi de 0 kalır → kartta yıldız görünmez)
+        public double AverageRating { get; set; }
+        public int ReviewCount { get; set; }
+
     }
 }

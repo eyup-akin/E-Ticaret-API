@@ -76,6 +76,40 @@ namespace ETicaretAPI.Controllers
             }
         }
 
+
+        // Verilen ürün listesine puan özetini doldurur (tek sorguda — N+1 yok)
+        private async Task PuanlariDoldur(List<ProductDto> urunler)
+        {
+            if (urunler.Count == 0)
+            {
+                return;
+            }
+
+            var idler = urunler.Select(u => u.Id).ToList();
+
+            var puanlar = await _context.Reviews
+                .Where(r => idler.Contains(r.ProductId))
+                .GroupBy(r => r.ProductId)
+                .Select(g => new
+                {
+                    ProductId = g.Key,
+                    Ortalama = g.Average(x => x.Rating),
+                    Sayi = g.Count()
+                })
+                .ToListAsync();
+
+            foreach (var urun in urunler)
+            {
+                var p = puanlar.FirstOrDefault(x => x.ProductId == urun.Id);
+                if (p != null)
+                {
+                    urun.AverageRating = Math.Round(p.Ortalama, 1);
+                    urun.ReviewCount = p.Sayi;
+                }
+            }
+        }
+
+
         // Diskteki fiziksel dosyayı siler (yoksa sessizce geçer)
         private void DiskDosyasiniSil(string url)
         {
@@ -170,6 +204,7 @@ namespace ETicaretAPI.Controllers
                 .ToListAsync();
 
             await ResimleriDoldur(products);
+            await PuanlariDoldur(products);
 
             return Ok(products);
         }
@@ -195,6 +230,7 @@ namespace ETicaretAPI.Controllers
             };
 
             await ResimleriDoldur(new List<ProductDto> { dto });
+            await PuanlariDoldur(new List<ProductDto> { dto });
 
             return Ok(dto);
         }

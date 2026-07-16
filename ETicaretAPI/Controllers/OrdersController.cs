@@ -175,6 +175,11 @@ namespace ETicaretAPI.Controllers
                     Status = o.Status,
                     PaymentStatus = o.PaymentStatus,
                     CardLast4 = o.CardLast4,
+
+                    CreatedAt = o.CreatedAt,
+                    CancelReason = o.CancelReason,
+                    CancelledAt = o.CancelledAt,
+
                     Items = _context.OrderItems
                         .Where(oi => oi.OrderId == o.Id)
                         .Join(_context.Products,
@@ -229,6 +234,11 @@ namespace ETicaretAPI.Controllers
                 Status = order.Status,
                 PaymentStatus = order.PaymentStatus,
                 CardLast4 = order.CardLast4,
+
+                CreatedAt = order.CreatedAt,
+                CancelReason = order.CancelReason,
+                CancelledAt = order.CancelledAt,
+
                 Items = items
             };
 

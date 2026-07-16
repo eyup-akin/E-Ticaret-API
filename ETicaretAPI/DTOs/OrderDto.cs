@@ -7,6 +7,11 @@
         public string Status { get; set; } = string.Empty;       // kargo durumu
         public string PaymentStatus { get; set; } = string.Empty; // ödeme durumu
         public string CardLast4 { get; set; } = string.Empty;
+
+        public DateTime CreatedAt { get; set; }       // ⭐ sipariş tarihi
+        public string? CancelReason { get; set; }      // ⭐ iptal sebebi (null = iptal değil)
+        public DateTime? CancelledAt { get; set; }      // ⭐ iptal tarihi
+
         public List<OrderItemDto> Items { get; set; } = new();
     }
 

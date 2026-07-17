@@ -9,25 +9,58 @@ namespace ETicaretAPI.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize(Roles = "admin")]   // tüm endpoint'ler admin'e özel
+    [Authorize(Roles = "admin")]
     public class ImportsController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly IWebHostEnvironment _env;
 
-        public ImportsController(AppDbContext context)
+        private const long MaxDosyaBoyutu = 10 * 1024 * 1024; // 10 MB
+
+        public ImportsController(AppDbContext context, IWebHostEnvironment env)
         {
             _context = context;
+            _env = env;
         }
 
-        // 🔴 POST /api/imports/test
-        // 7a testi: gerçek Excel olmadan boş bir iş oluşturup Hangfire'a atar.
-        [HttpPost("test")]
-        public async Task<IActionResult> TestIsBaslat()
+        // 🔴 POST /api/imports/products   (multipart/form-data, alan adı: dosya)
+        [HttpPost("products")]
+        public async Task<IActionResult> UrunleriIceAktar([FromForm] IFormFile dosya)
         {
-            // 1) İş kaydını oluştur (Bekliyor)
+            if (dosya == null || dosya.Length == 0)
+            {
+                return BadRequest(new { mesaj = "Dosya seçilmedi!" });
+            }
+
+            if (dosya.Length > MaxDosyaBoyutu)
+            {
+                return BadRequest(new { mesaj = "Dosya en fazla 10 MB olabilir!" });
+            }
+
+            var uzanti = Path.GetExtension(dosya.FileName).ToLowerInvariant();
+            if (uzanti != ".xlsx")
+            {
+                return BadRequest(new { mesaj = "Sadece .xlsx dosyası yükleyebilirsin." });
+            }
+
+            // 1) Dosyayı diske kaydet — arka plan işi buradan okuyacak.
+            //    (Yüklenen dosyayı doğrudan Hangfire'a veremeyiz; istek biter,
+            //     dosya kaybolur. O yüzden önce diske alıyoruz, yolunu iletiyoruz.)
+            var klasor = Path.Combine(WebKok(), "uploads", "imports");
+            Directory.CreateDirectory(klasor);
+
+            var kayitAdi = Guid.NewGuid().ToString("N") + ".xlsx";
+            var tamYol = Path.Combine(klasor, kayitAdi);
+
+            using (var akis = new FileStream(tamYol, FileMode.Create))
+            {
+                await dosya.CopyToAsync(akis);
+            }
+
+            // 2) İş kaydını oluştur
             var job = new ImportJob
             {
-                FileName = "test-isi.xlsx",
+                FileName = dosya.FileName,
                 Status = "Bekliyor",
                 CreatedByUserId = KullaniciId()
             };
@@ -35,15 +68,14 @@ namespace ETicaretAPI.Controllers
             _context.ImportJobs.Add(job);
             await _context.SaveChangesAsync();
 
-            // 2) Hangfire kuyruğuna at — arka planda çalışacak.
-            //    Burada iş HEMEN çalışmaz, kuyruğa girer; Hangfire çeker.
-            BackgroundJob.Enqueue<IceAktarmaServisi>(s => s.TestIsiCalistir(job.Id));
+            // 3) Hangfire kuyruğuna at
+            BackgroundJob.Enqueue<IceAktarmaServisi>(s => s.UrunleriIceAktar(job.Id, tamYol));
 
-            // 3) HEMEN cevap dön (202 Accepted): kullanıcı beklemesin
+            // 4) Hemen 202 dön — kullanıcı beklemesin
             return Accepted(new
             {
                 jobId = job.Id,
-                mesaj = "İş kabul edildi, arka planda çalışıyor."
+                mesaj = "Dosya alındı, ürünler arka planda ekleniyor."
             });
         }
 
@@ -71,11 +103,16 @@ namespace ETicaretAPI.Controllers
             });
         }
 
-        // JWT'den kullanıcı id'sini çeker (yoksa null)
+        private string WebKok()
+        {
+            return string.IsNullOrEmpty(_env.WebRootPath)
+                ? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot")
+                : _env.WebRootPath;
+        }
+
         private int? KullaniciId()
         {
             var claim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
-
             if (claim != null && int.TryParse(claim.Value, out var id))
             {
                 return id;

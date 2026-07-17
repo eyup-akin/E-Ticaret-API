@@ -49,7 +49,8 @@ namespace ETicaretAPI.Controllers
 
             var resimler = await _context.ProductImages
                 .Where(r => idler.Contains(r.ProductId))
-                .OrderBy(r => r.SortOrder)
+                .OrderByDescending(r => r.IsMain)   // önce ANA resim
+                .ThenBy(r => r.SortOrder)           // sonra yükleme sırası
                 .ToListAsync();
 
             foreach (var urun in urunler)

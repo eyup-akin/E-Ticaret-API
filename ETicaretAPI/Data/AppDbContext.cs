@@ -24,6 +24,7 @@ namespace ETicaretAPI.Data
         public DbSet<Favorite> Favorites { get; set; }
         public DbSet<AuditLog> AuditLogs { get; set; }
         public DbSet<Review> Reviews { get; set; }
+        public DbSet<ImportJob> ImportJobs { get; set; } // ⭐ YENİ
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -78,6 +79,14 @@ namespace ETicaretAPI.Data
             modelBuilder.Entity<Product>()
                 .HasIndex(p => p.Barcode)
                 .IsUnique();
+
+
+            // ⭐ YENİ — içe aktarma işi tablosu, kolon boyutlarını düzgün ver
+            modelBuilder.Entity<ImportJob>(e =>
+            {
+                e.Property(x => x.FileName).HasMaxLength(260);
+                e.Property(x => x.Status).HasMaxLength(20);
+            });
         }
     }
 }

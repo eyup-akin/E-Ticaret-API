@@ -3,6 +3,9 @@ using Microsoft.AspNetCore.Mvc;          // ⭐ YENİ — BadRequestObjectResult
 using ETicaretAPI.Data;
 using ETicaretAPI.Middleware;            // ⭐ YENİ
 
+using Hangfire;
+using ETicaretAPI.Support;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // EF Core'u SQL Server'a bağla
@@ -74,6 +77,26 @@ builder.Services.AddControllers()
         };
     });
 
+
+
+// ⭐ YENİ — HANGFIRE KURULUMU
+// İşleri aynı SQL Server veritabanında saklıyoruz (kalıcılık: sunucu
+// restart olsa bile işler kaybolmaz).
+builder.Services.AddHangfire(config => config
+    .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+    .UseSimpleAssemblyNameTypeSerializer()
+    .UseRecommendedSerializerSettings()
+    .UseSqlServerStorage(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// Arka plan işçisini (server) başlat — işleri bu çeker ve çalıştırır
+builder.Services.AddHangfireServer();
+
+// İçe aktarma servisimizi tanıt (Hangfire bunu kendi scope'unda üretecek)
+builder.Services.AddScoped<ETicaretAPI.Services.IceAktarmaServisi>();
+
+
+
+
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
@@ -104,6 +127,16 @@ app.UseMiddleware<GuvenlikDamgasiMiddleware>(); //token bayat mı?
 //kullanıcı pasif mi? silinmiş mi?
 
 app.UseAuthorization();   // sonra: yetkisi var mı kontrol et
+
+
+
+// ⭐ YENİ — Hangfire yönetim paneli (sadece localhost'tan erişilebilir)
+app.UseHangfireDashboard("/hangfire", new DashboardOptions
+{
+    Authorization = new[] { new HangfireYetkiFiltresi() }
+});
+
+
 
 app.MapControllers();
 

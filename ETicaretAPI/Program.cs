@@ -23,6 +23,10 @@ builder.Services.AddCors(options =>
 // Token üreten servisi tanıt
 builder.Services.AddScoped<ETicaretAPI.Services.TokenService>();
 
+// ⭐ YENİ — dış URL'lerden resim indirebilmek için HttpClient fabrikası
+builder.Services.AddHttpClient();
+
+
 // JWT token doğrulamayı kur
 builder.Services.AddAuthentication(options =>
 {

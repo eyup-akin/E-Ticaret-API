@@ -13,16 +13,21 @@ namespace ETicaretAPI.Controllers
     {
         private readonly AppDbContext _context;
         private readonly IWebHostEnvironment _env; // wwwroot'un yerini bilir
+        private readonly IHttpClientFactory _httpFactory; // ⭐ URL'den resim indirmek için
 
         // Resim yükleme kuralları — tek yerde dursun
         private const long MaxDosyaBoyutu = 5 * 1024 * 1024; // 5 MB
         private static readonly string[] IzinliUzantilar = { ".jpg", ".jpeg", ".png", ".webp" };
         private static readonly string[] IzinliTipler = { "image/jpeg", "image/png", "image/webp" };
 
-        public ProductsController(AppDbContext context, IWebHostEnvironment env)
+        public ProductsController(
+            AppDbContext context,
+            IWebHostEnvironment env,
+            IHttpClientFactory httpFactory)
         {
             _context = context;
             _env = env;
+            _httpFactory = httpFactory;
         }
 
         // ==========================================================
@@ -190,8 +195,44 @@ namespace ETicaretAPI.Controllers
                 return true;
             }
 
+          
+            
             return false;
         }
+
+
+
+        // URL'den gelen ham byte'lar için: gerçek resim mi kontrolü + doğru uzantı.
+        // Resim değilse null döner. (Uzantıyı URL'den değil, içerikten belirliyoruz.)
+        private static string? ResimUzantisiBul(byte[] veri)
+        {
+            if (veri.Length < 12)
+            {
+                return null;
+            }
+
+            // JPEG: FF D8 FF
+            if (veri[0] == 0xFF && veri[1] == 0xD8 && veri[2] == 0xFF)
+            {
+                return ".jpg";
+            }
+
+            // PNG: 89 50 4E 47
+            if (veri[0] == 0x89 && veri[1] == 0x50 && veri[2] == 0x4E && veri[3] == 0x47)
+            {
+                return ".png";
+            }
+
+            // WEBP: "RIFF" .... "WEBP"
+            if (veri[0] == 0x52 && veri[1] == 0x49 && veri[2] == 0x46 && veri[3] == 0x46 &&
+                veri[8] == 0x57 && veri[9] == 0x45 && veri[10] == 0x42 && veri[11] == 0x50)
+            {
+                return ".webp";
+            }
+
+            return null;
+        }
+
 
 
 
@@ -460,6 +501,115 @@ namespace ETicaretAPI.Controllers
                 SortOrder = resim.SortOrder
             });
         }
+
+
+
+        // 🔴 POST /api/products/5/images/url   (JSON: { "url": "https://..." })
+        // Dış adresteki resmi SUNUCUYA indirir, doğrular ve /uploads'a kaydeder.
+        // Böylece kaynak link ölse bile bizim resmimiz durur.
+        [Authorize(Roles = "admin")]
+        [HttpPost("{id}/images/url")]
+        public async Task<IActionResult> UploadImageFromUrl(int id, [FromBody] ImageUrlDto dto)
+        {
+            // 1) Ürün var mı?
+            var urunVarMi = await _context.Products.AnyAsync(p => p.Id == id);
+            if (!urunVarMi)
+            {
+                return NotFound(new { mesaj = "Ürün bulunamadı biladerim!" });
+            }
+
+            // 2) URL geçerli ve http/https mi? (file://, ftp:// gibi şemaları engelle)
+            if (!Uri.TryCreate(dto.Url, UriKind.Absolute, out var adres) ||
+                (adres.Scheme != Uri.UriSchemeHttp && adres.Scheme != Uri.UriSchemeHttps))
+            {
+                return BadRequest(new { mesaj = "Geçersiz URL! Sadece http/https adres verilebilir." });
+            }
+
+            byte[] veri;
+
+            try
+            {
+                // 3) İndir — en fazla 15 saniye bekle, sonra iptal et
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+                var client = _httpFactory.CreateClient();
+                // Bazı siteler "tarayıcı değilsen vermem" diyor → kimlik ekleyelim
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (ETicaretAPI)");
+
+                using var cevap = await client.GetAsync(adres, cts.Token);
+
+                if (!cevap.IsSuccessStatusCode)
+                {
+                    return BadRequest(new
+                    {
+                        mesaj = "Resim indirilemedi (sunucu " + (int)cevap.StatusCode + " döndü)."
+                    });
+                }
+
+                // 4) Boyut ön kontrolü — sunucu Content-Length söylediyse
+                if (cevap.Content.Headers.ContentLength > MaxDosyaBoyutu)
+                {
+                    return BadRequest(new { mesaj = "Resim en fazla 5 MB olabilir!" });
+                }
+
+                veri = await cevap.Content.ReadAsByteArrayAsync(cts.Token);
+            }
+            catch (TaskCanceledException)
+            {
+                return BadRequest(new { mesaj = "Resim indirme zaman aşımına uğradı." });
+            }
+            catch (HttpRequestException)
+            {
+                return BadRequest(new { mesaj = "Resme ulaşılamadı, URL'yi kontrol et." });
+            }
+
+            // 5) İndirilen gerçek boyut sınırda mı? (Content-Length yalan olabilir)
+            if (veri.Length == 0 || veri.Length > MaxDosyaBoyutu)
+            {
+                return BadRequest(new { mesaj = "Resim boş ya da 5 MB'tan büyük!" });
+            }
+
+            // 6) Byte'lara bak: gerçek resim mi + hangi uzantı?
+            var uzanti = ResimUzantisiBul(veri);
+            if (uzanti == null)
+            {
+                return BadRequest(new { mesaj = "Adresteki içerik geçerli bir resim değil (jpg, png, webp)." });
+            }
+
+            // 7) Klasörü hazırla, benzersiz isimle diske yaz
+            var klasor = Path.Combine(WebKok(), "uploads", "urunler");
+            Directory.CreateDirectory(klasor);
+
+            var yeniAd = Guid.NewGuid().ToString("N") + uzanti;
+            var tamYol = Path.Combine(klasor, yeniAd);
+
+            await System.IO.File.WriteAllBytesAsync(tamYol, veri);
+
+            // 8) Veritabanına kaydet (dosya yüklemeyle birebir aynı mantık)
+            var mevcutSayi = await _context.ProductImages.CountAsync(r => r.ProductId == id);
+
+            var resim = new ProductImage
+            {
+                ProductId = id,
+                Url = "/uploads/urunler/" + yeniAd,
+                IsMain = mevcutSayi == 0,   // ilk resim otomatik ana resim
+                SortOrder = mevcutSayi
+            };
+
+            _context.ProductImages.Add(resim);
+            await _context.SaveChangesAsync();
+
+            return Ok(new ProductImageDto
+            {
+                Id = resim.Id,
+                Url = resim.Url,
+                IsMain = resim.IsMain,
+                SortOrder = resim.SortOrder
+            });
+        }
+
+
+
 
         // 🔴 DELETE /api/products/images/12
         [Authorize(Roles = "admin")]

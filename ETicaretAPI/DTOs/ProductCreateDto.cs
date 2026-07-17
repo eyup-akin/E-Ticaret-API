@@ -8,8 +8,17 @@ namespace ETicaretAPI.DTOs
         [StringLength(200, MinimumLength = 2, ErrorMessage = "Ürün adı 2-200 karakter olmalı!")]
         public string Name { get; set; } = string.Empty;
 
+        // ⭐ YENİ — barkod artık ZORUNLU. Yeni üründe boş bırakılamaz.
+        [Required(ErrorMessage = "Barkod zorunlu!")]
+        [StringLength(64, MinimumLength = 1, ErrorMessage = "Barkod 1-64 karakter olmalı!")]
+        public string Barcode { get; set; } = string.Empty;
+
         [Range(0.01, 1000000, ErrorMessage = "Fiyat 0'dan büyük olmalı!")]
         public decimal Price { get; set; }
+
+        // ⭐ YENİ — maliyet. 0 olabilir (promosyon ürünü) ama negatif olamaz.
+        [Range(0, 1000000, ErrorMessage = "Maliyet negatif olamaz!")]
+        public decimal Cost { get; set; }
 
         [Range(0, 100000, ErrorMessage = "Stok negatif olamaz!")]
         public int Stock { get; set; }

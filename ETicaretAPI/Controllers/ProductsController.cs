@@ -223,9 +223,21 @@ namespace ETicaretAPI.Controllers
                     Name = p.Name,
                     Price = p.Price,
                     Stock = p.Stock,
-                    CategoryId = p.CategoryId
+                    CategoryId = p.CategoryId,
+                    Barcode = p.Barcode,
+                    Cost = p.Cost
                 })
                 .ToListAsync();
+
+            // Maliyet hassas bilgi: admin değilse hepsini null'a çek.
+            // Böylece müşteriye/misafire maliyet GİTMEZ.
+            if (!User.IsInRole("admin"))
+            {
+                foreach (var u in products)
+                {
+                    u.Cost = null;
+                }
+            }
 
             await ResimleriDoldur(products);
             await PuanlariDoldur(products);
@@ -250,7 +262,10 @@ namespace ETicaretAPI.Controllers
                 Name = product.Name,
                 Price = product.Price,
                 Stock = product.Stock,
-                CategoryId = product.CategoryId
+                CategoryId = product.CategoryId,
+                Barcode = product.Barcode,
+                // Maliyet sadece admin isteğinde dolsun, değilse null kalsın
+                Cost = User.IsInRole("admin") ? product.Cost : null
             };
 
             await ResimleriDoldur(new List<ProductDto> { dto });
@@ -266,10 +281,22 @@ namespace ETicaretAPI.Controllers
         [HttpPost]
         public async Task<IActionResult> CreateProduct([FromBody] ProductCreateDto dto)
         {
+            var barkod = dto.Barcode.Trim();
+
+            // Aynı barkod başka bir üründe var mı? (veritabanı da engelliyor ama
+            // burada önden kontrol edip kullanıcıya anlaşılır mesaj veriyoruz)
+            var barkodVar = await _context.Products.AnyAsync(p => p.Barcode == barkod);
+            if (barkodVar)
+            {
+                return BadRequest(new { mesaj = "Bu barkod zaten başka bir üründe kayıtlı!" });
+            }
+
             var product = new Product
             {
                 Name = dto.Name,
+                Barcode = barkod,
                 Price = dto.Price,
+                Cost = dto.Cost,
                 Stock = dto.Stock,
                 CategoryId = dto.CategoryId
             };
@@ -293,8 +320,20 @@ namespace ETicaretAPI.Controllers
                 return NotFound(new { mesaj = "Güncellenecek ürün bulunamadı!" });
             }
 
+            var barkod = dto.Barcode.Trim();
+
+            // Aynı barkod BAŞKA bir üründe var mı? (kendisi hariç tutuluyor)
+            var barkodVar = await _context.Products
+                .AnyAsync(p => p.Barcode == barkod && p.Id != id);
+            if (barkodVar)
+            {
+                return BadRequest(new { mesaj = "Bu barkod zaten başka bir üründe kayıtlı!" });
+            }
+
             product.Name = dto.Name;
+            product.Barcode = barkod;
             product.Price = dto.Price;
+            product.Cost = dto.Cost;
             product.Stock = dto.Stock;
             product.CategoryId = dto.CategoryId;
 

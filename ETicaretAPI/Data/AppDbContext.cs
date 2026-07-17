@@ -15,24 +15,21 @@ namespace ETicaretAPI.Data
         public DbSet<Category> Categories { get; set; }
         public DbSet<Product> Products { get; set; }
         public DbSet<Address> Addresses { get; set; }
-        public DbSet<Card> Cards { get; set; }              // YENİ
+        public DbSet<Card> Cards { get; set; }
         public DbSet<CartItem> CartItems { get; set; }
         public DbSet<Order> Orders { get; set; }
         public DbSet<OrderItem> OrderItems { get; set; }
-        public DbSet<Payment> Payments { get; set; }        // YENİ
-        public DbSet<ProductImage> ProductImages { get; set; }  // YENİ
+        public DbSet<Payment> Payments { get; set; }
+        public DbSet<ProductImage> ProductImages { get; set; }
         public DbSet<Favorite> Favorites { get; set; }
-
-        public DbSet<AuditLog> AuditLogs { get; set; }  // YENİ
-
-        public DbSet<Review> Reviews { get; set; }  // YENİ - yorumlar tablosu
-
+        public DbSet<AuditLog> AuditLogs { get; set; }
+        public DbSet<Review> Reviews { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
 
-            // Bir kullanıcı bir ürüne YALNIZCA BİR yorum yapabilsin (veritabanı garantisi)
+            // Bir kullanıcı bir ürüne YALNIZCA BİR yorum yapabilsin
             modelBuilder.Entity<Review>()
                 .HasIndex(r => new { r.UserId, r.ProductId })
                 .IsUnique();
@@ -51,9 +48,7 @@ namespace ETicaretAPI.Data
                 .HasForeignKey(r => r.UserId)
                 .OnDelete(DeleteBehavior.Restrict);
 
-
-            // ⭐ DECIMAL PRECISION — para alanları tam 18 basamak / 2 kuruş.
-            // Belirtmezsek EF uyarı verir; varsayılan hassasiyet kuruş kaybına yol açabilir.
+            // DECIMAL PRECISION — para alanları 18 basamak / 2 kuruş
             modelBuilder.Entity<Product>()
                 .Property(p => p.Price)
                 .HasPrecision(18, 2);
@@ -70,12 +65,19 @@ namespace ETicaretAPI.Data
                 .Property(p => p.Amount)
                 .HasPrecision(18, 2);
 
+            // ⭐ YENİ — maliyet de para alanı, aynı hassasiyet
+            modelBuilder.Entity<Product>()
+                .Property(p => p.Cost)
+                .HasPrecision(18, 2);
+
+            // ⭐ YENİ — barkod benzersiz olsun (aynı barkod iki üründe olamaz).
+            // Barcode nullable olduğu için EF, SQL Server'da bu index'e
+            // otomatik "WHERE [Barcode] IS NOT NULL" filtresi ekler.
+            // Yani barkodu boş (null) olan eski ürünler birbiriyle çakışmaz,
+            // sadece DOLU barkodlar tekil olmak zorunda.
+            modelBuilder.Entity<Product>()
+                .HasIndex(p => p.Barcode)
+                .IsUnique();
         }
-
-
     }
-
-
-
-
 }

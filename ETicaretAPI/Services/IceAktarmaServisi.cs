@@ -12,9 +12,25 @@ namespace ETicaretAPI.Services
     {
         private readonly AppDbContext _context;
 
-        public IceAktarmaServisi(AppDbContext context)
+        // ⭐ YENİ — dış URL'lerden resim indirmek için HttpClient fabrikası.
+        //    (Program.cs'te AddHttpClient() ile zaten kayıtlı; buraya enjekte ediyoruz.)
+        private readonly IHttpClientFactory _httpFactory;
+
+        // ⭐ YENİ — wwwroot'un diskteki yerini bilmek için (resmi oraya yazacağız).
+        private readonly IWebHostEnvironment _env;
+
+        // ⭐ YENİ — resim kuralları, tek yerde dursun (ProductsController ile aynı sınırlar).
+        private const long MaxResimBoyutu = 5 * 1024 * 1024; // 5 MB
+        private const int MaxResimSayisi = 8;                // bir ürüne en fazla 8 resim
+
+        public IceAktarmaServisi(
+            AppDbContext context,
+            IHttpClientFactory httpFactory,   // ⭐ YENİ
+            IWebHostEnvironment env)          // ⭐ YENİ
         {
             _context = context;
+            _httpFactory = httpFactory;
+            _env = env;
         }
 
         // Hangfire bunu arka planda çağırır.
@@ -70,6 +86,11 @@ namespace ETicaretAPI.Services
                 var stokSutun = SutunNo("stok", "stock", "adet");
                 var kategoriSutun = SutunNo("kategori", "category");
 
+                // ⭐ YENİ — resim/görsel sütunu (isteğe bağlı; birden çok isim destekleniyor)
+                var resimSutun = SutunNo(
+                    "resim", "resimler", "gorsel", "görsel", "gorseller", "görseller",
+                    "resim url", "görsel url", "gorsel url", "image", "images", "image url", "url");
+
                 // 2) Zorunlu sütunlar var mı?
                 var eksik = new List<string>();
                 if (barkodSutun == null) eksik.Add("Barkod");
@@ -108,6 +129,12 @@ namespace ETicaretAPI.Services
                 var sonSatir = sonKullanilan.RowNumber();
                 job.Total = Math.Max(0, sonSatir - 1); // başlık hariç tahmini
                 await _context.SaveChangesAsync();
+
+                // ⭐ YENİ — Tüm satırlar için TEK bir HttpClient kur ve tekrar kullan.
+                //    Her satırda yenisini açmak yerine bir tane açıp paylaşmak daha verimli.
+                //    Bazı siteler "tarayıcı değilsen vermem" der → kimlik (User-Agent) ekliyoruz.
+                var client = _httpFactory.CreateClient();
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (ETicaretAPI)");
 
                 // 4) Satırları işle (2. satırdan itibaren)
                 for (int r = 2; r <= sonSatir; r++)
@@ -193,7 +220,35 @@ namespace ETicaretAPI.Services
                     };
 
                     _context.Products.Add(urun);
-                    await _context.SaveChangesAsync();
+                    await _context.SaveChangesAsync(); // ⭐ artık urun.Id dolu — resimler buna bağlanacak
+
+                    // ⭐ YENİ — RESİMLERİ İNDİR
+                    //    Resim sütunu varsa ve hücre boş değilse, içindeki linkleri indirmeyi dener.
+                    //    Bir hücrede birden çok resim olabilir → satır sonu / ; / | ile ayrılır.
+                    //    Kural: resim inmezse ürünü BAŞARISIZ sayma, sadece o resmi atla (skip-and-count).
+                    if (resimSutun != null)
+                    {
+                        var resimHucresi = satir.Cell(resimSutun.Value).GetString().Trim();
+
+                        if (!string.IsNullOrEmpty(resimHucresi))
+                        {
+                            // Linkleri ayır, boşlukları temizle, sadece http/https ile başlayanları al,
+                            // en fazla MaxResimSayisi tanesini işle.
+                            var linkler = resimHucresi
+                                .Split(new[] { '\n', '\r', ';', '|' },
+                                       StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                .Where(x => x.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                                .Take(MaxResimSayisi)
+                                .ToList();
+
+                            foreach (var link in linkler)
+                            {
+                                // Her resmi tek tek indiriyoruz (sıralı). Biri patlarsa
+                                // TekResimIndirVeKaydet false döner, biz sadece diğerine geçeriz.
+                                await TekResimIndirVeKaydet(urun.Id, link, client);
+                            }
+                        }
+                    }
 
                     barkodSeti.Add(barkod); // aynı dosyada tekrar gelirse yakala
                     job.Success++;
@@ -224,6 +279,126 @@ namespace ETicaretAPI.Services
         }
 
         // ---------- YARDIMCILAR ----------
+
+        // ⭐ YENİ — wwwroot klasörünün diskteki tam yolu.
+        //    (ProductsController'daki WebKok() ile birebir aynı; Hangfire scope'unda
+        //     WebRootPath bazen boş gelebildiği için CurrentDirectory'ye düşüyoruz.)
+        private string WebKok()
+        {
+            return string.IsNullOrEmpty(_env.WebRootPath)
+                ? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot")
+                : _env.WebRootPath;
+        }
+
+        // ⭐ YENİ — TEK BİR URL'DEN RESMİ İNDİR, DOĞRULA, KAYDET.
+        //    Başarılıysa true, herhangi bir sorunda false döner (satırı/ürünü asla patlatmaz).
+        //    Mantık, ProductsController.UploadImageFromUrl ile birebir aynı — tutarlılık için.
+        private async Task<bool> TekResimIndirVeKaydet(int productId, string url, HttpClient client)
+        {
+            // 1) URL geçerli ve http/https mi? (file://, ftp:// gibi şemaları engelle)
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var adres) ||
+                (adres.Scheme != Uri.UriSchemeHttp && adres.Scheme != Uri.UriSchemeHttps))
+            {
+                return false;
+            }
+
+            byte[] veri;
+
+            try
+            {
+                // 2) İndir — en fazla 15 saniye bekle, sonra iptal et
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                using var cevap = await client.GetAsync(adres, cts.Token);
+
+                if (!cevap.IsSuccessStatusCode)
+                {
+                    return false; // sunucu 404/403 vb. döndü → atla
+                }
+
+                // 3) Boyut ön kontrolü — sunucu Content-Length söylediyse
+                if (cevap.Content.Headers.ContentLength > MaxResimBoyutu)
+                {
+                    return false;
+                }
+
+                veri = await cevap.Content.ReadAsByteArrayAsync(cts.Token);
+            }
+            catch
+            {
+                // Zaman aşımı, ağ hatası, çözülemeyen adres... hepsini yut, sadece atla.
+                return false;
+            }
+
+            // 4) İndirilen gerçek boyut sınırda mı? (Content-Length yalan olabilir)
+            if (veri.Length == 0 || veri.Length > MaxResimBoyutu)
+            {
+                return false;
+            }
+
+            // 5) Byte'lara bak: gerçek resim mi + hangi uzantı? (URL'nin uzantısına GÜVENMİYORUZ)
+            var uzanti = ResimUzantisiBul(veri);
+            if (uzanti == null)
+            {
+                return false;
+            }
+
+            // 6) Klasörü hazırla, benzersiz isimle diske yaz
+            var klasor = Path.Combine(WebKok(), "uploads", "urunler");
+            Directory.CreateDirectory(klasor);
+
+            var yeniAd = Guid.NewGuid().ToString("N") + uzanti;
+            var tamYol = Path.Combine(klasor, yeniAd);
+
+            await File.WriteAllBytesAsync(tamYol, veri);
+
+            // 7) Veritabanına kaydet (tekil yüklemeyle birebir aynı mantık):
+            //    o ürünün ilk resmi otomatik ANA resim olsun, sıra numarası mevcut sayı olsun.
+            var mevcutSayi = await _context.ProductImages.CountAsync(r => r.ProductId == productId);
+
+            var resim = new ProductImage
+            {
+                ProductId = productId,
+                Url = "/uploads/urunler/" + yeniAd,
+                IsMain = mevcutSayi == 0,
+                SortOrder = mevcutSayi
+            };
+
+            _context.ProductImages.Add(resim);
+            await _context.SaveChangesAsync();
+
+            return true;
+        }
+
+        // ⭐ YENİ — URL'den gelen ham byte'lar gerçek resim mi + doğru uzantı ne?
+        //    (ProductsController'daki ResimUzantisiBul'un aynısı — uzantıyı içerikten belirliyoruz.)
+        private static string? ResimUzantisiBul(byte[] veri)
+        {
+            if (veri.Length < 12)
+            {
+                return null;
+            }
+
+            // JPEG: FF D8 FF
+            if (veri[0] == 0xFF && veri[1] == 0xD8 && veri[2] == 0xFF)
+            {
+                return ".jpg";
+            }
+
+            // PNG: 89 50 4E 47
+            if (veri[0] == 0x89 && veri[1] == 0x50 && veri[2] == 0x4E && veri[3] == 0x47)
+            {
+                return ".png";
+            }
+
+            // WEBP: "RIFF" .... "WEBP"
+            if (veri[0] == 0x52 && veri[1] == 0x49 && veri[2] == 0x46 && veri[3] == 0x46 &&
+                veri[8] == 0x57 && veri[9] == 0x45 && veri[10] == 0x42 && veri[11] == 0x50)
+            {
+                return ".webp";
+            }
+
+            return null;
+        }
 
         // Hücreyi decimal okur. Sayı hücresi ya da "199,90"/"199.90" metni olabilir.
         private static bool DecimalOku(IXLCell hucre, out decimal sonuc)

@@ -47,6 +47,15 @@ builder.Services.AddScoped<ETicaretAPI.Services.TokenService>();
 builder.Services.AddHttpClient();
 
 
+// ⭐ YENİ — resim indirmeye ÖZEL client: otomatik redirect KAPALI.
+// SSRF: saldırgan public bir URL verip 302 ile iç adrese yönlendiremesin.
+builder.Services.AddHttpClient("resimIndirici")
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+    {
+        AllowAutoRedirect = false
+    });
+
+
 // JWT token doğrulamayı kur
 builder.Services.AddAuthentication(options =>
 {

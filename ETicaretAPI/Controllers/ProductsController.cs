@@ -4,6 +4,8 @@ using Microsoft.EntityFrameworkCore;
 using ETicaretAPI.Data;
 using ETicaretAPI.Models;
 using ETicaretAPI.DTOs;
+using System.Net;          // ⭐ YENİ — IPAddress, Dns
+using System.Net.Sockets;  // ⭐ YENİ — AddressFamily
 
 namespace ETicaretAPI.Controllers
 {
@@ -504,6 +506,111 @@ namespace ETicaretAPI.Controllers
 
 
 
+        // ⭐ SSRF KALKANI — hedef adres bizim İÇ AĞIMIZA mı bakıyor?
+        // Adresi IP'ye çevirir; çözümlenen TÜM IP'ler public değilse reddeder.
+        // (Tek bir iç IP bile varsa gitmeyiz — güvenli taraf.)
+        private static async Task<bool> GuvenliUzakAdresMi(Uri adres)
+        {
+            IPAddress[] ipler;
+            try
+            {
+                // Host'u IP'ye çevir. Host zaten IP ise onu aynen döndürür.
+                ipler = await Dns.GetHostAddressesAsync(adres.DnsSafeHost);
+            }
+            catch
+            {
+                return false; // çözümlenemeyen adrese hiç gitme
+            }
+
+            if (ipler.Length == 0)
+            {
+                return false;
+            }
+
+            foreach (var ip in ipler)
+            {
+                if (OzelVeyaDahiliMi(ip))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        // Verilen IP localhost / iç ağ / özel aralık mı?
+        private static bool OzelVeyaDahiliMi(IPAddress ip)
+        {
+            // "::ffff:192.168.x.x" gibi IPv4-eşlenmiş IPv6 ise sade IPv4'e indir.
+            if (ip.IsIPv4MappedToIPv6)
+            {
+                ip = ip.MapToIPv4();
+            }
+
+            // localhost (127.x.x.x ve ::1)
+            if (IPAddress.IsLoopback(ip))
+            {
+                return true;
+            }
+
+            // IPv6 özel aralıklar
+            if (ip.AddressFamily == AddressFamily.InterNetworkV6)
+            {
+                if (ip.IsIPv6LinkLocal) // fe80::/10
+                {
+                    return true;
+                }
+
+                // fc00::/7 — unique local (iç ağ IPv6)
+                var v6 = ip.GetAddressBytes();
+                if ((v6[0] & 0xFE) == 0xFC)
+                {
+                    return true;
+                }
+
+                return false;
+            }
+
+            // IPv4 özel/dahili aralıklar
+            var b = ip.GetAddressBytes();
+
+            if (b[0] == 10) // 10.0.0.0/8
+            {
+                return true;
+            }
+
+            if (b[0] == 172 && b[1] >= 16 && b[1] <= 31) // 172.16.0.0/12
+            {
+                return true;
+            }
+
+            if (b[0] == 192 && b[1] == 168) // 192.168.0.0/16
+            {
+                return true;
+            }
+
+            // 169.254.0.0/16 — link-local + BULUT METADATA (169.254.169.254)
+            if (b[0] == 169 && b[1] == 254)
+            {
+                return true;
+            }
+
+            if (b[0] == 0) // 0.0.0.0/8 ("bu ağ")
+            {
+                return true;
+            }
+
+            if (b[0] == 100 && b[1] >= 64 && b[1] <= 127) // 100.64.0.0/10 (CGNAT)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+
+
+
         // 🔴 POST /api/products/5/images/url   (JSON: { "url": "https://..." })
         // Dış adresteki resmi SUNUCUYA indirir, doğrular ve /uploads'a kaydeder.
         // Böylece kaynak link ölse bile bizim resmimiz durur.
@@ -525,6 +632,16 @@ namespace ETicaretAPI.Controllers
                 return BadRequest(new { mesaj = "Geçersiz URL! Sadece http/https adres verilebilir." });
             }
 
+
+            // 2.5) ⭐ SSRF KALKANI — hedef iç ağa/localhost'a bakıyorsa gitme.
+            // Mesajı bilerek belirsiz tutuyoruz: saldırgana "burası iç adres"
+            // ipucu vermeyelim (ağ haritası çıkarmasını kolaylaştırmasın).
+            if (!await GuvenliUzakAdresMi(adres))
+            {
+                return BadRequest(new { mesaj = "Bu adrese izin verilmiyor." });
+            }
+
+
             byte[] veri;
 
             try
@@ -532,7 +649,9 @@ namespace ETicaretAPI.Controllers
                 // 3) İndir — en fazla 15 saniye bekle, sonra iptal et
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
 
-                var client = _httpFactory.CreateClient();
+                var client = _httpFactory.CreateClient("resimIndirici"); // redirect kapalı (SSRF)
+
+
                 // Bazı siteler "tarayıcı değilsen vermem" diyor → kimlik ekleyelim
                 client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (ETicaretAPI)");
 

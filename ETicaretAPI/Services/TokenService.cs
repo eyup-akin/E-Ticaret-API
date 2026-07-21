@@ -48,6 +48,7 @@ namespace ETicaretAPI.Services
 
             var token = new JwtSecurityToken(
                 issuer: _config["Jwt:Issuer"],
+                audience: _config["Jwt:Audience"], // ⭐ YENİ — token "kime" verildi
                 claims: claims,
 
                 // ⭐ DEĞİŞTİ: 7 gün → 15 dakika.

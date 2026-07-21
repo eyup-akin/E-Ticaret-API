@@ -15,11 +15,28 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 // CORS: mobil ve web admin'in bağlanabilmesi için
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll", policy =>
+    options.AddPolicy("VarsayilanCors", policy =>
     {
-        policy.AllowAnyOrigin()
-              .AllowAnyMethod()
-              .AllowAnyHeader();
+        if (builder.Environment.IsDevelopment())
+        {
+            // Geliştirmede serbest — admin panel farklı portlardan açılıyor,
+            // mobil cihaz IP'si değişiyor; uğraştırmasın.
+            policy.AllowAnyOrigin()
+                  .AllowAnyMethod()
+                  .AllowAnyHeader();
+        }
+        else
+        {
+            // Canlıda YALNIZCA bilinen origin'ler (admin panel domaini).
+            // Liste appsettings > Cors:AllowedOrigins'ten okunur.
+            var izinliOriginler = builder.Configuration
+                .GetSection("Cors:AllowedOrigins")
+                .Get<string[]>() ?? Array.Empty<string>();
+
+            policy.WithOrigins(izinliOriginler)
+                  .AllowAnyMethod()
+                  .AllowAnyHeader();
+        }
     });
 });
 
@@ -42,7 +59,8 @@ builder.Services.AddAuthentication(options =>
     {
         ValidateIssuer = true,
         ValidIssuer = builder.Configuration["Jwt:Issuer"],
-        ValidateAudience = false,
+        ValidateAudience = true, // ⭐ DEĞİŞTİ — audience'ı da doğrula
+        ValidAudience = builder.Configuration["Jwt:Audience"], // ⭐ YENİ
         ValidateLifetime = true,
         ValidateIssuerSigningKey = true,
         IssuerSigningKey = new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(
@@ -119,7 +137,7 @@ if (app.Environment.IsDevelopment())
 // Böylece http://localhost:5289/uploads/urunler/xxx.jpg çalışır
 app.UseStaticFiles();
 
-app.UseCors("AllowAll");
+app.UseCors("VarsayilanCors");
 
 app.UseAuthentication();  // önce: token'ı oku, kim olduğunu belirle
 

@@ -4,6 +4,9 @@ using ETicaretAPI.Data;
 using ETicaretAPI.Models;
 using ETicaretAPI.DTOs;
 
+
+using Microsoft.AspNetCore.RateLimiting; // ⭐ YENİ
+
 namespace ETicaretAPI.Controllers
 {
     [Route("api/[controller]")]
@@ -47,6 +50,7 @@ namespace ETicaretAPI.Controllers
         }
 
         // POST /api/auth/login
+        [EnableRateLimiting("giris")] // ⭐ YENİ — dakikada 5 deneme sınırı
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginDto dto)
         {

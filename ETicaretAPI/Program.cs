@@ -122,7 +122,32 @@ builder.Services.AddHangfireServer();
 builder.Services.AddScoped<ETicaretAPI.Services.IceAktarmaServisi>();
 
 
+// ⭐ YENİ — RATE LIMIT (brute-force / çok sık deneme koruması)
+// "giris" politikası: bir IP, dakikada en fazla 5 login denemesi yapabilir.
+// FixedWindow = sabit pencere: her 1 dakikalık dilimde sayaç sıfırlanır.
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddPolicy("giris", httpContext =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            // Sayacı IP'ye göre böl — her IP'nin kendi kotası olsun.
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "bilinmeyen",
+            factory: _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,                    // 1 dakikada 5 deneme
+                Window = TimeSpan.FromMinutes(1),   // pencere boyu
+                QueueLimit = 0                       // fazlasını bekletme, direkt reddet
+            }));
 
+    // Limit aşılınca ne dönsün? Kendi { mesaj } formatımıza uyalım
+    // (mobil/admin zaten veri.mesaj okuyor).
+    options.OnRejected = async (context, token) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        context.HttpContext.Response.ContentType = "application/json";
+        await context.HttpContext.Response.WriteAsync(
+            "{\"mesaj\":\"Çok fazla deneme yaptın biladerim, lütfen biraz bekle.\"}", token);
+    };
+});
 
 builder.Services.AddOpenApi();
 
@@ -154,6 +179,8 @@ app.UseAuthentication();  // önce: token'ı oku, kim olduğunu belirle
 //kullanıcı pasif mi? silinmiş mi?
 
 app.UseAuthorization();   // sonra: yetkisi var mı kontrol et
+
+app.UseRateLimiter();     // ⭐ YENİ — rate limit kontrolünü devreye al
 
 
 

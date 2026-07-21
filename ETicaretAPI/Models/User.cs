@@ -29,5 +29,19 @@
         // Hesap ne zamana kadar kilitli? null = kilit yok.
         // Süre GELECEKTEyse giriş reddedilir; GEÇMİŞteyse kilit kalkmış demektir.
         public DateTime? KilitBitis { get; set; }
+
+
+        // ⭐ YENİ — EMAIL DOĞRULAMA
+        // Yeni kayıtlar doğrulanmamış (false) başlar; linke tıklayınca true olur.
+        public bool EmailDogrulandiMi { get; set; } = false;
+
+        // Doğrulama token'ının HASH'i. Ham token maille gider; refresh'te olduğu
+        // gibi burada da yalnızca hash saklarız (DB sızsa link kullanılamasın).
+        public string? EmailDogrulamaTokenHash { get; set; }
+
+        // Token ne zamana kadar geçerli (24 saat vereceğiz).
+        public DateTime? EmailDogrulamaTokenBitis { get; set; }
+
+
     }
 }

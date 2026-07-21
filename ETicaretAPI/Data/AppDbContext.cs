@@ -116,6 +116,13 @@ namespace ETicaretAPI.Data
                  .HasForeignKey(x => x.UserId)
                  .OnDelete(DeleteBehavior.Cascade);
             });
+
+
+            // ⭐ YENİ — email doğrulama token hash'i SHA-256 hex = 64 karakter
+            modelBuilder.Entity<User>()
+                .Property(u => u.EmailDogrulamaTokenHash)
+                .HasMaxLength(64);
+
         }
     }
 }

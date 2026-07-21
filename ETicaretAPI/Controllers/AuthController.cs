@@ -19,6 +19,11 @@ namespace ETicaretAPI.Controllers
         // Refresh token ömrü — tek yerden değiştirebilelim diye sabit.
         private const int RefreshGunSayisi = 30;
 
+
+        private const int MaxYanlisDeneme = 5;  // ⭐ YENİ — kaç yanlıştan sonra kilit
+        private const int KilitDakika = 15;     // ⭐ YENİ — kilit süresi (dakika)
+
+
         public AuthController(AppDbContext context, ETicaretAPI.Services.TokenService tokenService)
         {
             _context = context;
@@ -50,20 +55,61 @@ namespace ETicaretAPI.Controllers
         }
 
         // POST /api/auth/login
-        [EnableRateLimiting("giris")] // ⭐ YENİ — dakikada 5 deneme sınırı
+        [EnableRateLimiting("giris")] // 3a'dan: IP başına dakikada 5 deneme
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginDto dto)
         {
             var kullanici = await _context.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
 
-            // Kullanıcı yok VEYA şifre yanlış → aynı mesaj (hangisi olduğunu sızdırma).
-            if (kullanici == null || !BCrypt.Net.BCrypt.Verify(dto.Password, kullanici.PasswordHash))
+            // Kullanıcı yoksa sayaç tutamayız (satır yok) → genel mesaj.
+            // (Hesabın var olup olmadığını sızdırmamak için hep aynı cümle.)
+            if (kullanici == null)
                 return Unauthorized(new { mesaj = "Email veya şifre hatalı biladerim!" });
+
+            // ⭐ KİLİT KONTROLÜ — şifreyi denemeden ÖNCE bak.
+            // Kilitliyse doğru şifre bile içeri almaz; süre dolunca kendiliğinden açılır.
+            if (kullanici.KilitBitis != null && kullanici.KilitBitis > DateTime.UtcNow)
+            {
+                var kalan = (int)Math.Ceiling((kullanici.KilitBitis.Value - DateTime.UtcNow).TotalMinutes);
+                return Unauthorized(new
+                {
+                    mesaj = $"Çok fazla hatalı deneme. Hesabın geçici kilitli, {kalan} dk sonra tekrar dene."
+                });
+            }
+
+            // ⭐ ŞİFRE YANLIŞ → sayacı artır, sınırı geçtiyse kilitle.
+            if (!BCrypt.Net.BCrypt.Verify(dto.Password, kullanici.PasswordHash))
+            {
+                kullanici.YanlisGirisSayisi++;
+
+                if (kullanici.YanlisGirisSayisi >= MaxYanlisDeneme)
+                {
+                    kullanici.KilitBitis = DateTime.UtcNow.AddMinutes(KilitDakika);
+                    kullanici.YanlisGirisSayisi = 0; // kilit sonrası temiz sayfa açalım
+                    await _context.SaveChangesAsync();
+
+                    return Unauthorized(new
+                    {
+                        mesaj = $"Çok fazla hatalı deneme. Hesabın {KilitDakika} dk kilitlendi."
+                    });
+                }
+
+                await _context.SaveChangesAsync();
+                return Unauthorized(new { mesaj = "Email veya şifre hatalı biladerim!" });
+            }
+
+            // ⭐ ŞİFRE DOĞRU → sayaç/kilit varsa temizle (yalnızca gerekiyorsa DB'ye yaz).
+            if (kullanici.YanlisGirisSayisi != 0 || kullanici.KilitBitis != null)
+            {
+                kullanici.YanlisGirisSayisi = 0;
+                kullanici.KilitBitis = null;
+                await _context.SaveChangesAsync();
+            }
 
             if (!kullanici.IsActive)
                 return Unauthorized(new { mesaj = "Hesabın devre dışı bırakılmış. Lütfen yönetici ile iletişime geç." });
 
-            // Access (15 dk) + refresh (30 gün) üret; refresh'i DB'ye hash'leyerek yaz.
+            // Access (15 dk) + refresh (30 gün) üret
             var accessToken = _tokenService.TokenUret(kullanici);
             var refreshToken = await RefreshUretVeKaydet(kullanici.Id);
 

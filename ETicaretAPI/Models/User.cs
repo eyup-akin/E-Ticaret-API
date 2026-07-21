@@ -21,5 +21,13 @@
         // Rol değişince / pasifleşince bu damga YENİLENİR.
         // Elindeki eski token'ın damgası artık tutmaz → anında geçersiz olur.
         public string SecurityStamp { get; set; } = Guid.NewGuid().ToString();
+
+        // ⭐ YENİ — BRUTE-FORCE KİLİDİ
+        // Üst üste kaç yanlış şifre geldi (doğru girişte 0'a döner).
+        public int YanlisGirisSayisi { get; set; } = 0;
+
+        // Hesap ne zamana kadar kilitli? null = kilit yok.
+        // Süre GELECEKTEyse giriş reddedilir; GEÇMİŞteyse kilit kalkmış demektir.
+        public DateTime? KilitBitis { get; set; }
     }
 }

@@ -13,6 +13,9 @@ namespace ETicaretAPI.Controllers
         private readonly AppDbContext _context;
         private readonly ETicaretAPI.Services.TokenService _tokenService;
 
+        // Refresh token ömrü — tek yerden değiştirebilelim diye sabit.
+        private const int RefreshGunSayisi = 30;
+
         public AuthController(AppDbContext context, ETicaretAPI.Services.TokenService tokenService)
         {
             _context = context;
@@ -23,19 +26,12 @@ namespace ETicaretAPI.Controllers
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] RegisterDto dto)
         {
-            // 1) Bu email daha önce kullanılmış mı kontrol et
-            var emailVarMi = await _context.Users
-                .AnyAsync(u => u.Email == dto.Email);
-
+            var emailVarMi = await _context.Users.AnyAsync(u => u.Email == dto.Email);
             if (emailVarMi)
-            {
                 return BadRequest(new { mesaj = "Bu email zaten kayıtlı biladerim!" });
-            }
 
-            // 2) Şifreyi hash'le (asla düz metin saklamıyoruz)
             var hashlenmisSifre = BCrypt.Net.BCrypt.HashPassword(dto.Password);
 
-            // 3) Yeni kullanıcıyı oluştur
             var yeniKullanici = new User
             {
                 FullName = dto.FullName,
@@ -44,7 +40,6 @@ namespace ETicaretAPI.Controllers
                 Role = "customer" // yeni kayıtlar her zaman müşteri
             };
 
-            // 4) Veritabanına ekle ve kaydet
             _context.Users.Add(yeniKullanici);
             await _context.SaveChangesAsync();
 
@@ -55,43 +50,93 @@ namespace ETicaretAPI.Controllers
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginDto dto)
         {
-            // 1) Email'e göre kullanıcıyı bul
-            var kullanici = await _context.Users
-                .FirstOrDefaultAsync(u => u.Email == dto.Email);
+            var kullanici = await _context.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
 
-            // 2) Kullanıcı yoksa VEYA şifre yanlışsa — aynı mesajı ver (güvenlik)
-            if (kullanici == null ||
-                !BCrypt.Net.BCrypt.Verify(dto.Password, kullanici.PasswordHash))
-            {
+            // Kullanıcı yok VEYA şifre yanlış → aynı mesaj (hangisi olduğunu sızdırma).
+            if (kullanici == null || !BCrypt.Net.BCrypt.Verify(dto.Password, kullanici.PasswordHash))
                 return Unauthorized(new { mesaj = "Email veya şifre hatalı biladerim!" });
-            }
 
-            // 🌟 İŞTE BURAYA YAPIŞTIRIYORSUN (user yerine kullanici yazdık)
-            // PASİF KULLANICI GİRİŞ YAPAMAZ
             if (!kullanici.IsActive)
-            {
-                return Unauthorized(new
-                {
-                    mesaj = "Hesabın devre dışı bırakılmış. Lütfen yönetici ile iletişime geç."
-                });
-            }
+                return Unauthorized(new { mesaj = "Hesabın devre dışı bırakılmış. Lütfen yönetici ile iletişime geç." });
 
-            // 3) Doğruysa token üret
-            var token = _tokenService.TokenUret(kullanici);
+            // Access (15 dk) + refresh (30 gün) üret; refresh'i DB'ye hash'leyerek yaz.
+            var accessToken = _tokenService.TokenUret(kullanici);
+            var refreshToken = await RefreshUretVeKaydet(kullanici.Id);
 
-            // 4) Token'ı ve kullanıcı bilgisini döndür
             return Ok(new
             {
-                token = token,
+                token = accessToken,
+                refreshToken = refreshToken,
                 id = kullanici.Id,
                 fullName = kullanici.FullName,
                 role = kullanici.Role
             });
         }
 
+        // POST /api/auth/refresh — access 15 dk sonra ölünce istemci buraya gelir.
+        [HttpPost("refresh")]
+        public async Task<IActionResult> Refresh([FromBody] RefreshRequestDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.RefreshToken))
+                return Unauthorized(new { mesaj = "Refresh token gerekli." });
 
+            // Kullanıcı HAM token gönderir; biz hash'leyip DB'de onu ararız.
+            var hash = _tokenService.Hashle(dto.RefreshToken);
+            var kayit = await _context.RefreshTokens.FirstOrDefaultAsync(t => t.TokenHash == hash);
 
-        // 🟡 GET /api/auth/ben-kimim — giriş yapan kullanıcının profili
+            if (kayit == null)
+                return Unauthorized(new { mesaj = "Oturum geçersiz. Lütfen tekrar giriş yap." });
+
+            // ⭐ HIRSIZLIK YAKALAMA: iptal edilmiş bir token yine kullanılıyorsa
+            // büyük ihtimalle çalınmış → o kullanıcının TÜM token'larını iptal et.
+            if (kayit.RevokedAt != null)
+            {
+                await KullanicininTumTokenleriniIptalEt(kayit.UserId);
+                return Unauthorized(new { mesaj = "Oturum güvenliği ihlali. Lütfen tekrar giriş yap." });
+            }
+
+            if (!kayit.Aktif) // süresi dolmuş
+                return Unauthorized(new { mesaj = "Oturumun süresi doldu. Lütfen tekrar giriş yap." });
+
+            // Kullanıcının GÜNCEL hâlini oku — yeni access'i buna göre üreteceğiz,
+            // böylece rol değişikliği/pasifleşme refresh anında otomatik yansır.
+            var kullanici = await _context.Users.FindAsync(kayit.UserId);
+            if (kullanici == null || !kullanici.IsActive)
+            {
+                kayit.RevokedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+                return Unauthorized(new { mesaj = "Hesap erişilemez durumda. Lütfen tekrar giriş yap." });
+            }
+
+            // ROTATION: eskisini iptal et, yeni refresh + yeni access ver.
+            kayit.RevokedAt = DateTime.UtcNow;
+            var yeniRefresh = await RefreshUretVeKaydet(kullanici.Id);
+            var yeniAccess = _tokenService.TokenUret(kullanici);
+
+            return Ok(new { token = yeniAccess, refreshToken = yeniRefresh });
+        }
+
+        // POST /api/auth/logout — verilen refresh'i iptal eder (bu cihazı çıkışa atar).
+        [HttpPost("logout")]
+        public async Task<IActionResult> Logout([FromBody] RefreshRequestDto dto)
+        {
+            if (!string.IsNullOrWhiteSpace(dto.RefreshToken))
+            {
+                var hash = _tokenService.Hashle(dto.RefreshToken);
+                var kayit = await _context.RefreshTokens.FirstOrDefaultAsync(t => t.TokenHash == hash);
+
+                if (kayit != null && kayit.RevokedAt == null)
+                {
+                    kayit.RevokedAt = DateTime.UtcNow;
+                    await _context.SaveChangesAsync();
+                }
+            }
+
+            // Bulunsun bulunmasın aynı cevap — token'ın varlığını sızdırma.
+            return Ok(new { mesaj = "Çıkış yapıldı." });
+        }
+
+        // GET /api/auth/ben-kimim — giriş yapan kullanıcının profili
         [Microsoft.AspNetCore.Authorization.Authorize]
         [HttpGet("ben-kimim")]
         public async Task<IActionResult> BenKimim()
@@ -112,13 +157,44 @@ namespace ETicaretAPI.Controllers
                 .FirstOrDefaultAsync();
 
             if (kullanici == null)
-            {
                 return NotFound(new { mesaj = "Kullanıcı bulunamadı!" });
-            }
 
             return Ok(kullanici);
         }
 
+        // ---------- YARDIMCILAR ----------
 
+        // Yeni refresh üretir, hash'ini DB'ye yazar, HAM hâlini döndürür (istemciye o gider).
+        private async Task<string> RefreshUretVeKaydet(int userId)
+        {
+            var hamToken = _tokenService.RefreshTokenUret();
+
+            var cihaz = Request.Headers["User-Agent"].ToString();
+            if (cihaz.Length > 300) cihaz = cihaz.Substring(0, 300); // kolon sınırı 300
+
+            _context.RefreshTokens.Add(new RefreshToken
+            {
+                UserId = userId,
+                TokenHash = _tokenService.Hashle(hamToken),
+                ExpiresAt = DateTime.UtcNow.AddDays(RefreshGunSayisi),
+                CihazBilgisi = cihaz
+            });
+
+            await _context.SaveChangesAsync();
+            return hamToken;
+        }
+
+        // Bir kullanıcının tüm aktif refresh'lerini iptal eder (hırsızlık / hepsinden çıkış).
+        private async Task KullanicininTumTokenleriniIptalEt(int userId)
+        {
+            var aktifler = await _context.RefreshTokens
+                .Where(t => t.UserId == userId && t.RevokedAt == null)
+                .ToListAsync();
+
+            foreach (var t in aktifler)
+                t.RevokedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+        }
     }
 }

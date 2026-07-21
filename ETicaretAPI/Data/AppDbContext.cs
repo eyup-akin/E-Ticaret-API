@@ -26,6 +26,8 @@ namespace ETicaretAPI.Data
         public DbSet<Review> Reviews { get; set; }
         public DbSet<ImportJob> ImportJobs { get; set; } // ⭐ YENİ
 
+        public DbSet<RefreshToken> RefreshTokens { get; set; } // ⭐ YENİ
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -86,6 +88,33 @@ namespace ETicaretAPI.Data
             {
                 e.Property(x => x.FileName).HasMaxLength(260);
                 e.Property(x => x.Status).HasMaxLength(20);
+            });
+
+            // ⭐ YENİ — REFRESH TOKEN yapılandırması
+            modelBuilder.Entity<RefreshToken>(e =>
+            {
+                // Aramayı hash üzerinden yapacağız (kullanıcı ham token'ı gönderir,
+                // biz hash'ler ve bu kolonda ararız). Benzersiz + indeksli olsun:
+                //   - Benzersiz: aynı hash iki satırda olamaz (veri bütünlüğü).
+                //   - İndeks: milyonlarca satır olsa bile arama şimşek gibi olur.
+                e.HasIndex(x => x.TokenHash).IsUnique();
+
+                // SHA-256 hex çıktısı tam 64 karakterdir; kolonu ona göre sınırla.
+                e.Property(x => x.TokenHash).HasMaxLength(64);
+
+                // User-agent metni uzun olabilir, rahat bir tavan veriyoruz.
+                e.Property(x => x.CihazBilgisi).HasMaxLength(300);
+
+                // Kullanıcı ile ilişki.
+                // NEDEN CASCADE — oysa Review'da Restrict kullanmıştık?
+                //   Review bir KAYIT/DELİLDİR; kullanıcı gitse bile durması gerekir,
+                //   o yüzden orada Restrict (silme). RefreshToken ise sadece OTURUM
+                //   verisidir, saklama değeri yoktur; kullanıcı satırı bir gün
+                //   gerçekten silinirse bu token'lar da onunla birlikte gitsin.
+                e.HasOne<User>()
+                 .WithMany()
+                 .HasForeignKey(x => x.UserId)
+                 .OnDelete(DeleteBehavior.Cascade);
             });
         }
     }

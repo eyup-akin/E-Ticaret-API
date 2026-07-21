@@ -123,6 +123,12 @@ namespace ETicaretAPI.Data
                 .Property(u => u.EmailDogrulamaTokenHash)
                 .HasMaxLength(64);
 
+
+            // ⭐ YENİ — şifre sıfırlama token hash'i de 64 karakter (SHA-256 hex)
+            modelBuilder.Entity<User>()
+                .Property(u => u.SifreSifirlamaTokenHash)
+                .HasMaxLength(64);
+
         }
     }
 }

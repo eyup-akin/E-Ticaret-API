@@ -25,6 +25,8 @@ namespace ETicaretAPI.Controllers
 
         private const int EmailTokenSaat = 24;  // ⭐ YENİ — doğrulama linki 24 saat geçerli
 
+        private const int SifirlamaSaat = 1;     // ⭐ YENİ — sıfırlama linki 1 saat geçerli
+
 
         private readonly ETicaretAPI.Services.IEmailGonderici _email;
         private readonly IConfiguration _config;
@@ -120,6 +122,84 @@ namespace ETicaretAPI.Controllers
             await _context.SaveChangesAsync();
 
             return Ok(new { mesaj = "Email adresin doğrulandı, artık giriş yapabilirsin biladerim!" });
+        }
+
+
+
+        // POST /api/auth/forgot-password  { "email": "..." }
+        // Sıfırlama linki üretir ve (dev göndericiyle) gönderir.
+        [HttpPost("forgot-password")]
+        public async Task<IActionResult> ForgotPassword([FromBody] SifreSifirlamaIstekDto dto)
+        {
+            var kullanici = await _context.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
+
+            // ⭐ GÜVENLİK: kullanıcı bulunsa da bulunmasa da AYNI cevabı ver.
+            // Neden? Farklı cevap verirsek saldırgan "bu email kayıtlı mı?" diye
+            // sistemi tarayabilir (buna "user enumeration" denir). Hep aynı mesaj
+            // = hangi emaillerin kayıtlı olduğunu sızdırmayız.
+            if (kullanici != null && kullanici.IsActive)
+            {
+                var hamToken = _tokenService.RefreshTokenUret();
+
+                kullanici.SifreSifirlamaTokenHash = _tokenService.Hashle(hamToken);
+                kullanici.SifreSifirlamaTokenBitis = DateTime.UtcNow.AddHours(SifirlamaSaat);
+                await _context.SaveChangesAsync();
+
+                var tabanUrl = _config["Uygulama:TabanUrl"];
+                var link = $"{tabanUrl}/sifre-yenile?token={Uri.EscapeDataString(hamToken)}";
+
+                var govde =
+                    $"<p>Merhaba {kullanici.FullName},</p>" +
+                    $"<p>Şifreni sıfırlamak için aşağıdaki linke tıkla (1 saat geçerli):</p>" +
+                    $"<p><a href=\"{link}\">{link}</a></p>" +
+                    $"<p>Bu isteği sen yapmadıysan bu maili görmezden gelebilirsin.</p>";
+
+                await _email.GonderAsync(kullanici.Email, "Şifre Sıfırlama", govde);
+            }
+
+            // Her durumda aynı cevap
+            return Ok(new { mesaj = "Eğer bu email kayıtlıysa, sıfırlama linki gönderildi." });
+        }
+
+        // POST /api/auth/reset-password  { "token": "...", "yeniSifre": "..." }
+        // Maildeki token ile yeni şifreyi belirler.
+        [HttpPost("reset-password")]
+        public async Task<IActionResult> ResetPassword([FromBody] SifreYenileDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.Token) || string.IsNullOrWhiteSpace(dto.YeniSifre))
+                return BadRequest(new { mesaj = "Token ve yeni şifre gerekli." });
+
+            if (dto.YeniSifre.Length < 6)
+                return BadRequest(new { mesaj = "Şifre en az 6 karakter olmalı biladerim!" });
+
+            var hash = _tokenService.Hashle(dto.Token);
+            var kullanici = await _context.Users
+                .FirstOrDefaultAsync(u => u.SifreSifirlamaTokenHash == hash);
+
+            if (kullanici == null)
+                return BadRequest(new { mesaj = "Sıfırlama linki geçersiz." });
+
+            if (kullanici.SifreSifirlamaTokenBitis == null ||
+                kullanici.SifreSifirlamaTokenBitis < DateTime.UtcNow)
+                return BadRequest(new { mesaj = "Sıfırlama linkinin süresi dolmuş. Lütfen tekrar iste." });
+
+            // ✅ Yeni şifreyi hash'le ve kaydet, token'ı temizle (tek kullanımlık).
+            kullanici.PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.YeniSifre);
+            kullanici.SifreSifirlamaTokenHash = null;
+            kullanici.SifreSifirlamaTokenBitis = null;
+
+            // ⭐ ÖNEMLİ — GÜVENLİK DAMGASINI YENİLE.
+            // Şifre değişince eski oturumlar/refresh token'lar düşmeli. Damgayı
+            // yenileyince eski access token'lardaki "stamp" tutmaz; ayrıca
+            // aşağıda tüm refresh token'ları da iptal ediyoruz.
+            kullanici.SecurityStamp = Guid.NewGuid().ToString();
+
+            // Bu kullanıcının tüm aktif refresh token'larını iptal et (her cihazdan çıkış).
+            await KullanicininTumTokenleriniIptalEt(kullanici.Id);
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new { mesaj = "Şifren güncellendi, artık yeni şifrenle giriş yapabilirsin biladerim!" });
         }
 
 

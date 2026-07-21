@@ -42,6 +42,14 @@
         // Token ne zamana kadar geçerli (24 saat vereceğiz).
         public DateTime? EmailDogrulamaTokenBitis { get; set; }
 
+        // ⭐ YENİ — ŞİFRE SIFIRLAMA
+        // Aynı mantık: ham token maille gider, DB'de yalnızca HASH durur.
+        public string? SifreSifirlamaTokenHash { get; set; }
+
+        // Sıfırlama linki ne zamana kadar geçerli (1 saat vereceğiz —
+        // şifre işlemi hassas olduğu için doğrulamadan daha kısa tutuyoruz).
+        public DateTime? SifreSifirlamaTokenBitis { get; set; }
+
 
     }
 }

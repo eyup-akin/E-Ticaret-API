@@ -23,11 +23,22 @@ namespace ETicaretAPI.Controllers
         private const int MaxYanlisDeneme = 5;  // ⭐ YENİ — kaç yanlıştan sonra kilit
         private const int KilitDakika = 15;     // ⭐ YENİ — kilit süresi (dakika)
 
+        private const int EmailTokenSaat = 24;  // ⭐ YENİ — doğrulama linki 24 saat geçerli
 
-        public AuthController(AppDbContext context, ETicaretAPI.Services.TokenService tokenService)
+
+        private readonly ETicaretAPI.Services.IEmailGonderici _email;
+        private readonly IConfiguration _config;
+
+        public AuthController(
+            AppDbContext context,
+            ETicaretAPI.Services.TokenService tokenService,
+            ETicaretAPI.Services.IEmailGonderici email,   // ⭐ YENİ
+            IConfiguration config)                        // ⭐ YENİ
         {
             _context = context;
             _tokenService = tokenService;
+            _email = email;     // ⭐ YENİ
+            _config = config;   // ⭐ YENİ
         }
 
         // POST /api/auth/register
@@ -40,19 +51,78 @@ namespace ETicaretAPI.Controllers
 
             var hashlenmisSifre = BCrypt.Net.BCrypt.HashPassword(dto.Password);
 
+            // ⭐ Doğrulama token'ı üret. RefreshTokenUret zaten güvenli-rastgele
+            // opaque bir metin üretiyor; aynısını burada da kullanıyoruz.
+            var hamToken = _tokenService.RefreshTokenUret();
+
             var yeniKullanici = new User
             {
                 FullName = dto.FullName,
                 Email = dto.Email,
                 PasswordHash = hashlenmisSifre,
-                Role = "customer" // yeni kayıtlar her zaman müşteri
+                Role = "customer",
+
+                // ⭐ Doğrulanmamış başlar; linke tıklayınca açılacak
+                EmailDogrulandiMi = false,
+                EmailDogrulamaTokenHash = _tokenService.Hashle(hamToken), // sadece HASH saklanır
+                EmailDogrulamaTokenBitis = DateTime.UtcNow.AddHours(EmailTokenSaat)
             };
 
             _context.Users.Add(yeniKullanici);
             await _context.SaveChangesAsync();
 
-            return Ok(new { mesaj = "Kayıt başarılı biladerim!" });
+            // ⭐ Doğrulama linkini kur ve (dev göndericiyle) gönder.
+            // HAM token linke gider; DB'de yalnızca hash var → link sızsa bile
+            // DB'den geri üretilemez.
+            var tabanUrl = _config["Uygulama:TabanUrl"];
+            var link = $"{tabanUrl}/api/auth/verify-email?token={Uri.EscapeDataString(hamToken)}";
+
+            var govde =
+                $"<p>Merhaba {yeniKullanici.FullName},</p>" +
+                $"<p>Hesabını doğrulamak için aşağıdaki linke tıkla (24 saat geçerli):</p>" +
+                $"<p><a href=\"{link}\">{link}</a></p>";
+
+            await _email.GonderAsync(yeniKullanici.Email, "Email Doğrulama", govde);
+
+            return Ok(new { mesaj = "Kayıt başarılı! Lütfen email adresine gelen linkle hesabını doğrula." });
         }
+
+
+        // GET /api/auth/verify-email?token=xxxx
+        // Kullanıcı maildeki linke tıklayınca buraya gelir.
+        [HttpGet("verify-email")]
+        public async Task<IActionResult> VerifyEmail([FromQuery] string token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                return BadRequest(new { mesaj = "Doğrulama linki geçersiz." });
+
+            // Ham token'ı hash'leyip eşleşen kullanıcıyı bul (DB'de hash duruyor).
+            var hash = _tokenService.Hashle(token);
+            var kullanici = await _context.Users
+                .FirstOrDefaultAsync(u => u.EmailDogrulamaTokenHash == hash);
+
+            if (kullanici == null)
+                return BadRequest(new { mesaj = "Doğrulama linki geçersiz." });
+
+            // Zaten doğrulanmışsa (linke ikinci kez tıklandıysa) dostça karşıla.
+            if (kullanici.EmailDogrulandiMi)
+                return Ok(new { mesaj = "Hesabın zaten doğrulanmış, giriş yapabilirsin." });
+
+            // Süre dolmuş mu?
+            if (kullanici.EmailDogrulamaTokenBitis == null ||
+                kullanici.EmailDogrulamaTokenBitis < DateTime.UtcNow)
+                return BadRequest(new { mesaj = "Doğrulama linkinin süresi dolmuş. Lütfen tekrar kayıt ol veya yeni link iste." });
+
+            // ✅ Doğrula ve token'ı temizle (tek kullanımlık — tekrar kullanılamasın).
+            kullanici.EmailDogrulandiMi = true;
+            kullanici.EmailDogrulamaTokenHash = null;
+            kullanici.EmailDogrulamaTokenBitis = null;
+            await _context.SaveChangesAsync();
+
+            return Ok(new { mesaj = "Email adresin doğrulandı, artık giriş yapabilirsin biladerim!" });
+        }
+
+
 
         // POST /api/auth/login
         [EnableRateLimiting("giris")] // 3a'dan: IP başına dakikada 5 deneme
@@ -105,6 +175,12 @@ namespace ETicaretAPI.Controllers
                 kullanici.KilitBitis = null;
                 await _context.SaveChangesAsync();
             }
+
+
+            // ⭐ YENİ — email doğrulanmamışsa giriş yok.
+            if (!kullanici.EmailDogrulandiMi)
+                return Unauthorized(new { mesaj = "Önce email adresini doğrulaman gerekiyor. Kutunu (ve konsolu) kontrol et." });
+
 
             if (!kullanici.IsActive)
                 return Unauthorized(new { mesaj = "Hesabın devre dışı bırakılmış. Lütfen yönetici ile iletişime geç." });

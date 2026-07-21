@@ -123,7 +123,7 @@ app.UseCors("AllowAll");
 
 app.UseAuthentication();  // önce: token'ı oku, kim olduğunu belirle
 
-app.UseMiddleware<GuvenlikDamgasiMiddleware>(); //token bayat mı?
+// app.UseMiddleware<GuvenlikDamgasiMiddleware>(); //token bayat mı? //her istekte çalışması artık gereksiz. piplinedan çıkarıoyruz.
 //kullanıcı pasif mi? silinmiş mi?
 
 app.UseAuthorization();   // sonra: yetkisi var mı kontrol et

@@ -145,8 +145,11 @@ namespace ETicaretAPI.Controllers
                 kullanici.SifreSifirlamaTokenBitis = DateTime.UtcNow.AddHours(SifirlamaSaat);
                 await _context.SaveChangesAsync();
 
-                var tabanUrl = _config["Uygulama:TabanUrl"];
-                var link = $"{tabanUrl}/sifre-yenile?token={Uri.EscapeDataString(hamToken)}";
+                // ⭐ DEĞİŞTİ — TabanUrl (backend) değil, PanelUrl (React panel).
+                // Sebep: /sifre-yenile bir React route'u; backend'de o adres yok,
+                // TabanUrl kullanırsak kullanıcı linke tıklayınca 404 görür.
+                var panelUrl = _config["Uygulama:PanelUrl"];
+                var link = $"{panelUrl}/sifre-yenile?token={Uri.EscapeDataString(hamToken)}";
 
                 var govde =
                     $"<p>Merhaba {kullanici.FullName},</p>" +

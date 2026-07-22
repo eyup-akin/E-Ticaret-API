@@ -91,12 +91,17 @@ namespace ETicaretAPI.Controllers
 
 
         // GET /api/auth/verify-email?token=xxxx
-        // Kullanıcı maildeki linke tıklayınca buraya gelir.
+        // Kullanıcı maildeki linke TARAYICIDA tıklıyor.
+        //
+        // ⭐ DEĞİŞTİ: Artık JSON değil HTML döndürüyoruz. Eskiden kullanıcı
+        // ekranda çıplak {"mesaj":"..."} görüyordu. Bu endpoint'i insan
+        // tıklıyor, program değil — o yüzden insan formatında cevap veriyoruz.
         [HttpGet("verify-email")]
         public async Task<IActionResult> VerifyEmail([FromQuery] string token)
         {
             if (string.IsNullOrWhiteSpace(token))
-                return BadRequest(new { mesaj = "Doğrulama linki geçersiz." });
+                return DogrulamaSayfasi("Geçersiz Link",
+                    "Doğrulama linki eksik ya da bozuk. Linkin tamamını kopyaladığından emin ol.", false);
 
             // Ham token'ı hash'leyip eşleşen kullanıcıyı bul (DB'de hash duruyor).
             var hash = _tokenService.Hashle(token);
@@ -104,16 +109,19 @@ namespace ETicaretAPI.Controllers
                 .FirstOrDefaultAsync(u => u.EmailDogrulamaTokenHash == hash);
 
             if (kullanici == null)
-                return BadRequest(new { mesaj = "Doğrulama linki geçersiz." });
+                return DogrulamaSayfasi("Geçersiz Link",
+                    "Bu doğrulama linki geçerli değil. Uygulamadan yeni bir link isteyebilirsin.", false);
 
             // Zaten doğrulanmışsa (linke ikinci kez tıklandıysa) dostça karşıla.
             if (kullanici.EmailDogrulandiMi)
-                return Ok(new { mesaj = "Hesabın zaten doğrulanmış, giriş yapabilirsin." });
+                return DogrulamaSayfasi("Hesabın Zaten Doğrulanmış",
+                    "Uygulamaya dönüp giriş yapabilirsin.", true);
 
             // Süre dolmuş mu?
             if (kullanici.EmailDogrulamaTokenBitis == null ||
                 kullanici.EmailDogrulamaTokenBitis < DateTime.UtcNow)
-                return BadRequest(new { mesaj = "Doğrulama linkinin süresi dolmuş. Lütfen tekrar kayıt ol veya yeni link iste." });
+                return DogrulamaSayfasi("Linkin Süresi Dolmuş",
+                    "Bu link 24 saat geçerliydi. Uygulamadaki giriş ekranından yeni bir link isteyebilirsin.", false);
 
             // ✅ Doğrula ve token'ı temizle (tek kullanımlık — tekrar kullanılamasın).
             kullanici.EmailDogrulandiMi = true;
@@ -121,13 +129,61 @@ namespace ETicaretAPI.Controllers
             kullanici.EmailDogrulamaTokenBitis = null;
             await _context.SaveChangesAsync();
 
-            return Ok(new { mesaj = "Email adresin doğrulandı, artık giriş yapabilirsin biladerim!" });
+            return DogrulamaSayfasi("Email Adresin Doğrulandı",
+                "Hesabın hazır! Uygulamaya dönüp giriş yapabilirsin.", true);
+        }
+
+
+
+        // POST /api/auth/resend-verification  { "email": "..." }
+        // Doğrulama linkini kaybeden veya süresi dolan kullanıcı için yeni link üretir.
+        //
+        // NEDEN ŞART? Email doğrulama zorunlu olduğu an şu delik açılıyor:
+        // kullanıcı kayıt oldu ama maili kaybetti → giriş yapamıyor,
+        // yeniden kayıt olamıyor (email dolu), şifre sıfırlama işe yaramıyor
+        // (şifresini biliyor). Bu endpoint olmadan hesap ölü kalıyor.
+        [EnableRateLimiting("eposta")]
+        [HttpPost("resend-verification")]
+        public async Task<IActionResult> ResendVerification([FromBody] EmailIstekDto dto)
+        {
+            var kullanici = await _context.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
+
+            // Üç şart birden: hesap var + aktif + HENÜZ DOĞRULANMAMIŞ.
+            // Doğrulanmış hesaba yeniden link göndermek hem anlamsız hem riskli
+            // (saldırgan doğrulanmış hesapların token'ını sürekli yeniletebilirdi).
+            if (kullanici != null && kullanici.IsActive && !kullanici.EmailDogrulandiMi)
+            {
+                var hamToken = _tokenService.RefreshTokenUret();
+
+                // Eski token'ın hash'inin ÜZERİNE yazıyoruz → eski link ölür.
+                // Aynı anda iki geçerli link dolaşmasın.
+                kullanici.EmailDogrulamaTokenHash = _tokenService.Hashle(hamToken);
+                kullanici.EmailDogrulamaTokenBitis = DateTime.UtcNow.AddHours(EmailTokenSaat);
+                await _context.SaveChangesAsync();
+
+                var tabanUrl = _config["Uygulama:TabanUrl"];
+                var link = $"{tabanUrl}/api/auth/verify-email?token={Uri.EscapeDataString(hamToken)}";
+
+                var govde =
+                    $"<p>Merhaba {kullanici.FullName},</p>" +
+                    $"<p>Hesabını doğrulamak için aşağıdaki linke tıkla (24 saat geçerli):</p>" +
+                    $"<p><a href=\"{link}\">{link}</a></p>";
+
+                await _email.GonderAsync(kullanici.Email, "Email Doğrulama (Yeniden Gönderim)", govde);
+            }
+
+            // ⭐ GÜVENLİK: forgot-password'deki mantığın aynısı — hesap olsa da
+            // olmasa da, doğrulanmış olsa da olmasa da AYNI cevap.
+            // Farklı cevap verirsek saldırgan "bu email kayıtlı mı?" ve
+            // "doğrulanmış mı?" bilgilerini sızdırmış oluruz.
+            return Ok(new { mesaj = "Eğer bu hesap doğrulanmayı bekliyorsa, yeni bir link gönderildi." });
         }
 
 
 
         // POST /api/auth/forgot-password  { "email": "..." }
         // Sıfırlama linki üretir ve (dev göndericiyle) gönderir.
+        [EnableRateLimiting("eposta")] // ⭐ YENİ — mail bombardımanına karşı
         [HttpPost("forgot-password")]
         public async Task<IActionResult> ForgotPassword([FromBody] SifreSifirlamaIstekDto dto)
         {
@@ -380,6 +436,46 @@ namespace ETicaretAPI.Controllers
         // ---------- YARDIMCILAR ----------
 
         // Yeni refresh üretir, hash'ini DB'ye yazar, HAM hâlini döndürür (istemciye o gider).
+
+
+        // Tarayıcıda açılan doğrulama linki için basit bir HTML sayfası üretir.
+        //
+        // Neden ayrı metot? Dört farklı sonuç (geçersiz / süresi dolmuş /
+        // zaten doğrulanmış / başarılı) aynı sayfayı kullanıyor. HTML'i tek
+        // yerde tutuyoruz — tasarım değişince tek yer düzenlenir.
+        //
+        // Neden panele link koymuyoruz? verify-email pratikte bir MÜŞTERİ
+        // akışı (adminler kendileri kayıt olmuyor, superadmin terfi ettiriyor).
+        // Müşterinin gideceği yer mobil uygulama, admin paneli değil.
+        private ContentResult DogrulamaSayfasi(string baslik, string aciklama, bool basarili)
+        {
+            var renk = basarili ? "#27ae60" : "#e74c3c";
+
+            var html = $@"<!DOCTYPE html>
+                <html lang=""tr"">
+                <head>
+                  <meta charset=""utf-8"" />
+                  <meta name=""viewport"" content=""width=device-width, initial-scale=1"" />
+                  <title>{baslik}</title>
+                </head>
+                <body style=""margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f5f6fa;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif"">
+                  <div style=""background:#fff;border-radius:12px;padding:40px 32px;max-width:420px;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.08)"">
+                    <h1 style=""margin:0 0 14px;font-size:22px;color:{renk}"">{baslik}</h1>
+                    <p style=""margin:0;font-size:15px;line-height:1.6;color:#555"">{aciklama}</p>
+                  </div>
+                </body>
+                </html>";
+
+            var sonuc = Content(html, "text/html; charset=utf-8");
+
+            // Durum kodunu da doğru ver. Tarayıcı kullanıcısı görmez ama
+            // doğru HTTP semantiği önemli: hata = 400, başarı = 200.
+            sonuc.StatusCode = basarili ? 200 : 400;
+
+            return sonuc;
+        }
+
+
         private async Task<string> RefreshUretVeKaydet(int userId)
         {
             var hamToken = _tokenService.RefreshTokenUret();

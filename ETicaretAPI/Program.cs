@@ -145,6 +145,27 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0                       // fazlasını bekletme, direkt reddet
             }));
 
+
+
+    // ⭐ YENİ — "eposta" politikası: mail GÖNDEREN endpoint'ler için.
+    // Neden ayrı ve daha sıkı? Mail göndermek pahalı bir işlem:
+    //   - kurbanın gelen kutusu bombalanabilir (taciz)
+    //   - canlıda mail başına para ödenir (financial DoS)
+    //   - anormal gönderim mail servisini kara listeye düşürür
+    // 15 dakikada 3 istek: gerçek kullanıcı için fazlasıyla yeterli,
+    // saldırgan için işe yaramaz.
+    options.AddPolicy("eposta", httpContext =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "bilinmeyen",
+            factory: _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 3,
+                Window = TimeSpan.FromMinutes(15),
+                QueueLimit = 0
+            }));
+
+
+
     // Limit aşılınca ne dönsün? Kendi { mesaj } formatımıza uyalım
     // (mobil/admin zaten veri.mesaj okuyor).
     options.OnRejected = async (context, token) =>

@@ -261,8 +261,14 @@ namespace ETicaretAPI.Controllers
 
 
             // ⭐ YENİ — email doğrulanmamışsa giriş yok.
+            // "kod" alanı MAKİNE için: istemci bu durumu metne bakmadan ayırt etsin.
+            // Mesaj metni ileride değişse bile kod sabit kalır, istemci kırılmaz.
             if (!kullanici.EmailDogrulandiMi)
-                return Unauthorized(new { mesaj = "Önce email adresini doğrulaman gerekiyor. Kutunu (ve konsolu) kontrol et." });
+                return Unauthorized(new
+                {
+                    mesaj = "Önce email adresini doğrulaman gerekiyor. Kutunu (ve konsolu) kontrol et.",
+                    kod = "EMAIL_DOGRULANMADI"
+                });
 
 
             if (!kullanici.IsActive)

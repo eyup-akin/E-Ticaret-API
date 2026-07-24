@@ -475,6 +475,7 @@ namespace ETicaretAPI.Controllers
                 query = query.Where(x =>
                     x.u.FullName.Contains(arama) ||
                     x.u.Email.Contains(arama) ||
+                    x.o.OrderNumber.Contains(arama) ||   // ⭐ "4821" veya "SP-260724" aranabilir
                     x.o.Id.ToString().Contains(arama));
             }
 
@@ -503,6 +504,7 @@ namespace ETicaretAPI.Controllers
                 .Select(x => new
                 {
                     id = x.o.Id,
+                    siparisNo = x.o.OrderNumber,   // ⭐ ekranda gösterilecek
                     musteriAdi = x.u.FullName,
                     musteriEmail = x.u.Email,
                     tutar = x.o.Total,
@@ -551,10 +553,21 @@ namespace ETicaretAPI.Controllers
                 .Select(u => new { u.Id, u.FullName, u.Email })
                 .FirstOrDefaultAsync();
 
-            var adres = await _context.Addresses
-                .Where(a => a.Id == order.AddressId)
-                .Select(a => new { a.Title, a.FullAddress, a.City })
-                .FirstOrDefaultAsync();
+            // ⭐ ADRES ARTIK SİPARİŞİN İÇİNDEN OKUNUYOR
+            //
+            // Eskiden Addresses tablosuna gidiliyordu. Sonuç: müşteri
+            // adresini düzenleyince GEÇMİŞ siparişin adresi de değişmiş
+            // görünüyordu. Artık sipariş anında dondurulan hali okunuyor.
+            //
+            // Veritabanına gitmiyoruz — veri zaten elimizdeki "order"
+            // nesnesinin içinde. Bir sorgu da tasarruf ettik.
+            var adres = new
+            {
+                aliciAdi = order.ShippingFullName,
+                title = order.ShippingTitle,
+                city = order.ShippingCity,
+                fullAddress = order.ShippingFullAddress
+            };
 
             var kalemler = await _context.OrderItems
                 .Where(oi => oi.OrderId == id)
@@ -594,6 +607,7 @@ namespace ETicaretAPI.Controllers
             return Ok(new
             {
                 id = order.Id,
+                siparisNo = order.OrderNumber,   // ⭐
                 tarih = order.CreatedAt,
                 tutar = order.Total,
                 durum = order.Status,

@@ -150,6 +150,7 @@ namespace ETicaretAPI.Controllers
                 .Select(o => new
                 {
                     id = o.Id,
+                    siparisNo = o.OrderNumber,   // ⭐
                     tutar = o.Total,
                     durum = o.Status,
                     odemeDurumu = o.PaymentStatus,

@@ -73,6 +73,16 @@ namespace ETicaretAPI.Data
                 .Property(p => p.Cost)
                 .HasPrecision(18, 2);
 
+
+            // ⭐ YENİ — sipariş numarası benzersiz olmalı.
+            // Bu index performans için DEĞİL, DOĞRULUK için:
+            // aynı numara iki siparişe verilemesin diye son savunma hattı.
+            // Kodda kaç kontrol yaparsak yapalım, garantiyi veritabanı verir.
+            modelBuilder.Entity<Order>()
+                .HasIndex(o => o.OrderNumber)
+                .IsUnique();
+
+
             // ⭐ YENİ — barkod benzersiz olsun (aynı barkod iki üründe olamaz).
             // Barcode nullable olduğu için EF, SQL Server'da bu index'e
             // otomatik "WHERE [Barcode] IS NOT NULL" filtresi ekler.

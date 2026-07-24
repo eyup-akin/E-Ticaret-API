@@ -25,6 +25,52 @@ namespace ETicaretAPI.Controllers
             return int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
         }
 
+
+
+        // ============================================================
+        //  SİPARİŞ NUMARASI ÜRETİCİ
+        //
+        //  Format: SP-YYMMDD-NNNN   (örn. SP-260724-4821)
+        //
+        //  Neden Id'den türetmiyoruz?
+        //    Sıralı olurdu; herkes bir önceki/sonraki siparişin
+        //    numarasını tahmin edebilirdi.
+        //
+        //  Neden tarih var?
+        //    Çakışma alanını her gün sıfırlıyor. Aynı gün içinde
+        //    10.000 ihtimal var — günde binlerce sipariş gelmedikçe
+        //    çakışma pratikte imkânsız.
+        //
+        //  Neden "önce sor, sonra yaz"?
+        //    Bu kontrol KOLAYLIK içindir, garanti değildir. İki istek
+        //    aynı anda aynı numarayı üretip ikisi de "boş" cevabını
+        //    alabilir (yarış koşulu). Asıl garantiyi veritabanındaki
+        //    unique index verir: ikincisi hata alır, transaction geri
+        //    alınır. Olasılığı çok düşük olduğu için bu yeterli.
+        // ============================================================
+        private async Task<string> SiparisNoUretAsync()
+        {
+            for (int deneme = 0; deneme < 10; deneme++)
+            {
+                var tarih = DateTime.UtcNow.ToString("yyMMdd");
+                var rastgele = Random.Shared.Next(0, 10000).ToString("D4");
+                var aday = $"SP-{tarih}-{rastgele}";
+
+                var kullanilmisMi = await _context.Orders
+                    .AnyAsync(o => o.OrderNumber == aday);
+
+                if (!kullanilmisMi)
+                {
+                    return aday;
+                }
+            }
+
+            // 10 denemede boş numara bulunamadıysa ciddi bir sorun var
+            throw new InvalidOperationException("Sipariş numarası üretilemedi.");
+        }
+
+
+
         // 🟡 POST /api/orders — sepetten sipariş oluştur + ödeme simüle et
         [HttpPost]
         public async Task<IActionResult> CreateOrder([FromBody] OrderCreateDto dto)
@@ -50,6 +96,14 @@ namespace ETicaretAPI.Controllers
             if (kart == null)
             {
                 return BadRequest(new { mesaj = "Geçerli bir kart seçmelisin!" });
+            }
+
+            // 2b) Alıcı adını dondurmak için kullanıcı kaydını da çekiyoruz.
+            //     Token'daki isim bayat olabilir — DB'deki güncel hali doğrudur.
+            var kullanici = await _context.Users.FindAsync(userId);
+            if (kullanici == null)
+            {
+                return Unauthorized(new { mesaj = "Kullanıcı bulunamadı." });
             }
 
             // 3) Sepeti al (ürün bilgisiyle birlikte)
@@ -103,12 +157,23 @@ namespace ETicaretAPI.Controllers
                 // 6) Sipariş üst bilgisini oluştur
                 var siparis = new Order
                 {
+                    // ⭐ Benzersiz müşteri numarası
+                    OrderNumber = await SiparisNoUretAsync(),
+
                     UserId = userId,
                     AddressId = dto.AddressId,
                     Total = toplamTutar,
                     Status = "hazirlaniyor",
                     PaymentStatus = "odendi",           // ödeme simüle: başarılı
-                    CardLast4 = kart.Last4Digits         // kullanılan kartı dondur
+                    CardLast4 = kart.Last4Digits,       // kullanılan kartı dondur
+
+                    // ⭐ ADRESİ DONDUR
+                    // Müşteri yarın adresini değiştirse bile bu sipariş
+                    // nereye gideceğini bilmeye devam eder.
+                    ShippingFullName = kullanici.FullName,
+                    ShippingTitle = adres.Title,
+                    ShippingCity = adres.City,
+                    ShippingFullAddress = adres.FullAddress
                 };
 
                 _context.Orders.Add(siparis);
@@ -145,6 +210,7 @@ namespace ETicaretAPI.Controllers
                 {
                     mesaj = "Sipariş oluşturuldu ve ödeme alındı biladerim!",
                     siparisId = siparis.Id,
+                    siparisNo = siparis.OrderNumber,   // ⭐ mobil bunu gösterecek
                     toplam = toplamTutar,
                     odemeDurumu = "odendi"
                 });
@@ -171,7 +237,15 @@ namespace ETicaretAPI.Controllers
                 .Select(o => new OrderDto
                 {
                     Id = o.Id,
+                    OrderNumber = o.OrderNumber,
+
+                    ShippingFullName = o.ShippingFullName,
+                    ShippingTitle = o.ShippingTitle,
+                    ShippingCity = o.ShippingCity,
+                    ShippingFullAddress = o.ShippingFullAddress,
+
                     Total = o.Total,
+
                     Status = o.Status,
                     PaymentStatus = o.PaymentStatus,
                     CardLast4 = o.CardLast4,
@@ -230,7 +304,15 @@ namespace ETicaretAPI.Controllers
             var dto = new OrderDto
             {
                 Id = order.Id,
+                OrderNumber = order.OrderNumber,
+
+                ShippingFullName = order.ShippingFullName,
+                ShippingTitle = order.ShippingTitle,
+                ShippingCity = order.ShippingCity,
+                ShippingFullAddress = order.ShippingFullAddress,
+
                 Total = order.Total,
+
                 Status = order.Status,
                 PaymentStatus = order.PaymentStatus,
                 CardLast4 = order.CardLast4,

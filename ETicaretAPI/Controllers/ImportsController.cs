@@ -135,10 +135,36 @@ namespace ETicaretAPI.Controllers
                     : ClosedXML.Excel.XLColor.LightGray;
             }
 
+            // 👇👇👇 RESİMDEN GELEN KOD BURAYA EKLENDİ 👇👇👇
+            // Barkod sütununun TAMAMINI metin formatına al (başlık hariç aşağısı).
+            // Kullanıcı yeni satır eklediğinde de barkodu Excel bozmasın.
+            var barkodIndex = System.Array.FindIndex(
+                UrunKolonlari.Hepsi, k => k.BaslikAdi == "Barkod");
+
+            if (barkodIndex >= 0)
+            {
+                ws.Column(barkodIndex + 1).Style.NumberFormat.Format = "@";
+            }
+            // 👆👆👆 YENİ KODUN BİTİŞİ 👆👆👆
+
             // Örnek dolu satır (2. satır) — kullanıcı formatı görsün
             for (int i = 0; i < UrunKolonlari.Hepsi.Length; i++)
             {
-                ws.Cell(2, i + 1).Value = UrunKolonlari.Hepsi[i].OrnekDeger;
+                var kolon = UrunKolonlari.Hepsi[i];
+                var hucre = ws.Cell(2, i + 1);
+
+                // Barkod'u METİN olarak yaz. Aksi halde Excel uzun sayıyı
+                // bilimsel gösterime (8.69E+12) çevirip YUVARLIYOR — tüm
+                // barkodlar aynı değere düşüyor ve tekrar sayılıp eleniyor.
+                if (kolon.BaslikAdi == "Barkod")
+                {
+                    hucre.Style.NumberFormat.Format = "@"; // "@" = metin formatı
+                    hucre.SetValue(kolon.OrnekDeger);
+                }
+                else
+                {
+                    hucre.Value = kolon.OrnekDeger;
+                }
             }
 
             ws.Columns().AdjustToContents(); // sütunları içeriğe göre genişlet

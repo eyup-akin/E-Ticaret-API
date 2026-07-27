@@ -1,0 +1,95 @@
+﻿namespace ETicaretAPI.Services
+{
+    // TEK DOĞRU KAYNAK — Excel ürün sütunlarının tanımı.
+    //
+    // Hem içe aktarma (IceAktarmaServisi) hem şablon üretimi
+    // (ImportsController) buradan okur. Bir sütunun adını burada
+    // değiştirince ikisi birden değişir — asla ayrışamazlar.
+    public class UrunKolonu
+    {
+        // Şablonda başlık olarak YAZILACAK ad (kullanıcıya gösterilen)
+        public string BaslikAdi { get; set; } = string.Empty;
+
+        // İçe aktarmanın TANIYACAĞI tüm adlar (küçük harf).
+        // İlki genelde BaslikAdi'nın küçük hali olur.
+        public string[] KabulEdilenAdlar { get; set; } = System.Array.Empty<string>();
+
+        // Bu sütun boş bırakılamaz mı?
+        public bool Zorunlu { get; set; }
+
+        // Şablonun "Açıklama" sayfasında görünecek yardım metni
+        public string Aciklama { get; set; } = string.Empty;
+
+        // Şablona konacak örnek değer (dolu örnek satır için)
+        public string OrnekDeger { get; set; } = string.Empty;
+    }
+
+    public static class UrunKolonlari
+    {
+        // Sütunların TANIMI ve SIRASI. Şablon bu sıraya göre üretilir.
+        public static readonly UrunKolonu[] Hepsi = new[]
+        {
+            new UrunKolonu
+            {
+                BaslikAdi = "Barkod",
+                KabulEdilenAdlar = new[] { "barkod", "barcode" },
+                Zorunlu = true,
+                Aciklama = "Ürünün benzersiz barkod numarası. Aynı barkod iki kez eklenemez.",
+                OrnekDeger = "8690000000001"
+            },
+            new UrunKolonu
+            {
+                BaslikAdi = "Ürün Adı",
+                KabulEdilenAdlar = new[] { "urun adi", "ürün adı", "ad", "isim", "name" },
+                Zorunlu = true,
+                Aciklama = "Ürünün görünen adı.",
+                OrnekDeger = "Pamuklu Tişört"
+            },
+            new UrunKolonu
+            {
+                BaslikAdi = "Fiyat",
+                KabulEdilenAdlar = new[] { "fiyat", "price" },
+                Zorunlu = true,
+                Aciklama = "Satış fiyatı. Ondalık için virgül veya nokta kullanılabilir (199,90).",
+                OrnekDeger = "199,90"
+            },
+            new UrunKolonu
+            {
+                BaslikAdi = "Kategori",
+                KabulEdilenAdlar = new[] { "kategori", "category" },
+                Zorunlu = true,
+                Aciklama = "Kategori adı. Sistemde yoksa otomatik oluşturulur.",
+                OrnekDeger = "Giyim"
+            },
+            new UrunKolonu
+            {
+                BaslikAdi = "Maliyet",
+                KabulEdilenAdlar = new[] { "maliyet", "cost" },
+                Zorunlu = false,
+                Aciklama = "Ürünün alış maliyeti (isteğe bağlı). Kâr raporlarında kullanılır.",
+                OrnekDeger = "120,00"
+            },
+            new UrunKolonu
+            {
+                BaslikAdi = "Stok",
+                KabulEdilenAdlar = new[] { "stok", "stock", "adet" },
+                Zorunlu = false,
+                Aciklama = "Başlangıç stok adedi (isteğe bağlı). Boşsa 0 kabul edilir.",
+                OrnekDeger = "50"
+            },
+            new UrunKolonu
+            {
+                BaslikAdi = "Resim",
+                KabulEdilenAdlar = new[]
+                {
+                    "resim", "resimler", "gorsel", "görsel", "gorseller", "görseller",
+                    "resim url", "görsel url", "gorsel url",
+                    "image", "images", "image url", "url"
+                },
+                Zorunlu = false,
+                Aciklama = "Resim linkleri (isteğe bağlı). Birden fazlaysa ; veya | ile ayır. En fazla 8 adet.",
+                OrnekDeger = "https://ornek.com/tisort.jpg"
+            }
+        };
+    }
+}

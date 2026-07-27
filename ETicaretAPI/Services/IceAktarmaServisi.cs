@@ -2,6 +2,7 @@
 using Microsoft.EntityFrameworkCore;
 using ETicaretAPI.Data;
 using ETicaretAPI.Models;
+using System.Linq;
 
 namespace ETicaretAPI.Services
 {
@@ -79,17 +80,21 @@ namespace ETicaretAPI.Services
                     return null;
                 }
 
-                var barkodSutun = SutunNo("barkod", "barcode");
-                var adSutun = SutunNo("urun adi", "ürün adı", "ad", "isim", "name");
-                var fiyatSutun = SutunNo("fiyat", "price");
-                var maliyetSutun = SutunNo("maliyet", "cost");
-                var stokSutun = SutunNo("stok", "stock", "adet");
-                var kategoriSutun = SutunNo("kategori", "category");
+                // Sütun adlarını artık ELLE yazmıyoruz — UrunKolonlari'ndan okuyoruz.
+                // Böylece şablon ile içe aktarma AYNI kaynağı kullanır, asla ayrışmaz.
+                int? KolonBul(string baslik)
+                {
+                    var tanim = UrunKolonlari.Hepsi.First(k => k.BaslikAdi == baslik);
+                    return SutunNo(tanim.KabulEdilenAdlar);
+                }
 
-                // ⭐ YENİ — resim/görsel sütunu (isteğe bağlı; birden çok isim destekleniyor)
-                var resimSutun = SutunNo(
-                    "resim", "resimler", "gorsel", "görsel", "gorseller", "görseller",
-                    "resim url", "görsel url", "gorsel url", "image", "images", "image url", "url");
+                var barkodSutun = KolonBul("Barkod");
+                var adSutun = KolonBul("Ürün Adı");
+                var fiyatSutun = KolonBul("Fiyat");
+                var kategoriSutun = KolonBul("Kategori");
+                var maliyetSutun = KolonBul("Maliyet");
+                var stokSutun = KolonBul("Stok");
+                var resimSutun = KolonBul("Resim");
 
                 // 2) Zorunlu sütunlar var mı?
                 var eksik = new List<string>();

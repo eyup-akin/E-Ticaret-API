@@ -103,6 +103,82 @@ namespace ETicaretAPI.Controllers
             });
         }
 
+
+        // 🔴 GET /api/imports/sablon  → örnek Excel şablonunu indirir
+        //
+        // Şablon iki sayfadan oluşur:
+        //   1) Ürünler   → doldurulacak başlıklar + örnek dolu satır
+        //   2) Açıklama  → her sütun ne demek, zorunlu mu, format nasıl
+        //
+        // Başlıklar UrunKolonlari'ndan geldiği için içe aktarmayla
+        // GARANTİLİ uyumlu — elle yazılmıyor.
+        [HttpGet("sablon")]
+        public IActionResult SablonIndir()
+        {
+            using var wb = new ClosedXML.Excel.XLWorkbook();
+
+            // ----- SAYFA 1: ÜRÜNLER -----
+            var ws = wb.Worksheets.Add("Ürünler");
+
+            // Başlık satırı — UrunKolonlari sırasına göre
+            for (int i = 0; i < UrunKolonlari.Hepsi.Length; i++)
+            {
+                var kolon = UrunKolonlari.Hepsi[i];
+                var hucre = ws.Cell(1, i + 1);   // satır 1, sütun i+1 (Excel 1'den başlar)
+
+                hucre.Value = kolon.BaslikAdi;
+
+                // Zorunlu sütunları görsel olarak ayır: koyu + renkli arka plan
+                hucre.Style.Font.Bold = true;
+                hucre.Style.Fill.BackgroundColor = kolon.Zorunlu
+                    ? ClosedXML.Excel.XLColor.LightBlue
+                    : ClosedXML.Excel.XLColor.LightGray;
+            }
+
+            // Örnek dolu satır (2. satır) — kullanıcı formatı görsün
+            for (int i = 0; i < UrunKolonlari.Hepsi.Length; i++)
+            {
+                ws.Cell(2, i + 1).Value = UrunKolonlari.Hepsi[i].OrnekDeger;
+            }
+
+            ws.Columns().AdjustToContents(); // sütunları içeriğe göre genişlet
+
+            // ----- SAYFA 2: AÇIKLAMA -----
+            var ac = wb.Worksheets.Add("Açıklama");
+
+            ac.Cell(1, 1).Value = "Sütun";
+            ac.Cell(1, 2).Value = "Zorunlu mu?";
+            ac.Cell(1, 3).Value = "Açıklama";
+
+            ac.Row(1).Style.Font.Bold = true;
+
+            for (int i = 0; i < UrunKolonlari.Hepsi.Length; i++)
+            {
+                var kolon = UrunKolonlari.Hepsi[i];
+                var satir = i + 2; // başlık 1. satırda, veriler 2'den başlar
+
+                ac.Cell(satir, 1).Value = kolon.BaslikAdi;
+                ac.Cell(satir, 2).Value = kolon.Zorunlu ? "Evet" : "Hayır";
+                ac.Cell(satir, 3).Value = kolon.Aciklama;
+            }
+
+            ac.Columns().AdjustToContents();
+
+            // ----- BELLEKTE .xlsx'e ÇEVİR VE DÖN -----
+            // Diske YAZMIYORUZ — dosyayı bellekte üretip doğrudan gönderiyoruz.
+            // Şablon her seferinde aynı; saklamanın anlamı yok.
+            using var akis = new MemoryStream();
+            wb.SaveAs(akis);
+            var icerik = akis.ToArray();
+
+            return File(
+                icerik,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "urun-sablonu.xlsx");
+        }
+
+
+
         private string WebKok()
         {
             return string.IsNullOrEmpty(_env.WebRootPath)

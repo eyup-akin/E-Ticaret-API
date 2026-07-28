@@ -6,5 +6,6 @@
         public string Title { get; set; } = string.Empty;
         public string FullAddress { get; set; } = string.Empty;
         public string City { get; set; } = string.Empty;
+        public string Phone { get; set; } = string.Empty;   // ⭐ YENİ
     }
 }

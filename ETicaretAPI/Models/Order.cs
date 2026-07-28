@@ -31,6 +31,11 @@
         public string ShippingCity { get; set; } = string.Empty;
         public string ShippingFullAddress { get; set; } = string.Empty;
 
+        // ⭐ YENİ — dondurulmuş alıcı telefonu.
+        // Müşteri numarasını değiştirse bile bu sipariş hangi numarayla
+        // gönderildiyse onu hatırlar.
+        public string ShippingPhone { get; set; } = string.Empty;
+
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
         // İptal bilgileri — nullable, iptal edilmemiş siparişlerde boş

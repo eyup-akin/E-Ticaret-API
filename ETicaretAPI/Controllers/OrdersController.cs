@@ -175,7 +175,8 @@ namespace ETicaretAPI.Controllers
                     ShippingFullName = kullanici.FullName,
                     ShippingTitle = adres.Title,
                     ShippingCity = adres.City,
-                    ShippingFullAddress = adres.FullAddress
+                    ShippingFullAddress = adres.FullAddress,
+                    ShippingPhone = adres.Phone        // ⭐
                 };
 
                 _context.Orders.Add(siparis);
@@ -245,6 +246,7 @@ namespace ETicaretAPI.Controllers
                     ShippingTitle = o.ShippingTitle,
                     ShippingCity = o.ShippingCity,
                     ShippingFullAddress = o.ShippingFullAddress,
+                    ShippingPhone = o.ShippingPhone,          // ⭐
 
                     Total = o.Total,
 
@@ -312,6 +314,7 @@ namespace ETicaretAPI.Controllers
                 ShippingTitle = order.ShippingTitle,
                 ShippingCity = order.ShippingCity,
                 ShippingFullAddress = order.ShippingFullAddress,
+                ShippingPhone = order.ShippingPhone,          // ⭐
 
                 Total = order.Total,
 
@@ -581,7 +584,8 @@ namespace ETicaretAPI.Controllers
                 aliciAdi = order.ShippingFullName,
                 title = order.ShippingTitle,
                 city = order.ShippingCity,
-                fullAddress = order.ShippingFullAddress
+                fullAddress = order.ShippingFullAddress,
+                telefon = order.ShippingPhone        // ⭐
             };
 
             var kalemler = await _context.OrderItems
@@ -696,8 +700,7 @@ namespace ETicaretAPI.Controllers
                     adresBaslik = x.o.ShippingTitle,
                     sehir = x.o.ShippingCity,
                     acikAdres = x.o.ShippingFullAddress,
-
-                    // telefon = x.u.Phone,  // ⭐ commented out
+                    telefon = x.o.ShippingPhone,      // ⭐ User'dan değil, siparişten
                     email = x.u.Email
                 })
                 .ToListAsync();
@@ -729,7 +732,7 @@ namespace ETicaretAPI.Controllers
                     s.adresBaslik,
                     s.sehir,
                     s.acikAdres,
-                    // telefon = x.u.Phone,  // ⭐ commented out
+                    s.telefon,        // ⭐
                     s.email,
                     urunCesidi = kalem?.cesit ?? 0,
                     toplamAdet = kalem?.adet ?? 0

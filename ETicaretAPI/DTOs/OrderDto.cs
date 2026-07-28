@@ -15,6 +15,7 @@
         public string ShippingTitle { get; set; } = string.Empty;
         public string ShippingCity { get; set; } = string.Empty;
         public string ShippingFullAddress { get; set; } = string.Empty;
+        public string ShippingPhone { get; set; } = string.Empty;   // ⭐ YENİ
 
         public DateTime CreatedAt { get; set; }        // sipariş tarihi
         public string? CancelReason { get; set; }      // iptal sebebi (null = iptal değil)

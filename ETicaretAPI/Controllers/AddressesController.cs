@@ -38,7 +38,8 @@ namespace ETicaretAPI.Controllers
                     Id = a.Id,
                     Title = a.Title,
                     FullAddress = a.FullAddress,
-                    City = a.City
+                    City = a.City,
+                    Phone = a.Phone          // ⭐
                 })
                 .ToListAsync();
 
@@ -61,7 +62,8 @@ namespace ETicaretAPI.Controllers
                 UserId = userId,
                 Title = dto.Title,
                 FullAddress = dto.FullAddress,
-                City = dto.City
+                City = dto.City,
+                Phone = dto.Phone.Trim()     // ⭐
             };
 
             _context.Addresses.Add(address);
@@ -91,6 +93,7 @@ namespace ETicaretAPI.Controllers
             address.Title = dto.Title;
             address.FullAddress = dto.FullAddress;
             address.City = dto.City;
+            address.Phone = dto.Phone.Trim();   // ⭐
 
             await _context.SaveChangesAsync();
             return Ok(new { mesaj = "Adres güncellendi!" });

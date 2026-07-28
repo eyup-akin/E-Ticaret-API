@@ -20,6 +20,21 @@
         public string PaymentStatus { get; set; } = "beklemede"; // beklemede / odendi / iade_edildi
         public string CardLast4 { get; set; } = string.Empty;
 
+        // ⭐ KUPON — hepsi DONDURULMUŞ.
+        // Kupon sonradan silinse/değiştirilse bile bu sipariş ne indirim
+        // aldığını hatırlar. (UnitPrice ve Shipping* ile aynı mantık.)
+
+        // İndirimden ÖNCEKİ tutar. Total = SubTotal - DiscountAmount.
+        // Türetilebilir ama saklıyoruz: ileride kargo ücreti gibi kalemler
+        // girerse formül bozulur, para hesabında risk almıyoruz.
+        public decimal SubTotal { get; set; }
+
+        // Kullanılan kupon kodu. Boş = kupon kullanılmadı.
+        public string CouponCode { get; set; } = string.Empty;
+
+        // Uygulanan indirim tutarı. 0 = indirim yok.
+        public decimal DiscountAmount { get; set; }
+
         // ⭐ YENİ — DONDURULMUŞ TESLİMAT ADRESİ
         // AddressId hâlâ duruyor ama artık ona GÜVENMİYORUZ.
         // Müşteri adresini sonradan düzenlerse/silerse eski siparişin

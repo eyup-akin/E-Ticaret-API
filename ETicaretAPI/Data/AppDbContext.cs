@@ -28,6 +28,9 @@ namespace ETicaretAPI.Data
 
         public DbSet<RefreshToken> RefreshTokens { get; set; } // ⭐ YENİ
 
+        public DbSet<Coupon> Coupons { get; set; }
+        public DbSet<CouponUsage> CouponUsages { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -138,6 +141,48 @@ namespace ETicaretAPI.Data
             modelBuilder.Entity<User>()
                 .Property(u => u.SifreSifirlamaTokenHash)
                 .HasMaxLength(64);
+
+
+
+            // ⭐ Kupon kodu benzersiz olmalı — aynı kod iki kez oluşturulamaz.
+            // Kodu her zaman BÜYÜK harfe çevirip kaydediyoruz, o yüzden
+            // "indirim10" ve "INDIRIM10" çakışır (istediğimiz de bu).
+            modelBuilder.Entity<Coupon>()
+                .HasIndex(c => c.Code)
+                .IsUnique();
+
+            // Kullanım kayıtlarında sık sorgulanan alanlar.
+            // "Bu kullanıcı bu kuponu kaç kez kullandı?" sorgusu için.
+            modelBuilder.Entity<CouponUsage>()
+                .HasIndex(cu => new { cu.CouponId, cu.UserId });
+
+            // ⚠️ PARA ALANLARINDA HASSASİYET
+            // decimal varsayılan olarak SQL Server'da (18,2) gelmiyor;
+            // EF uyarı verir ve yuvarlama sorunları çıkabilir.
+            // Para alanlarında hassasiyeti AÇIKÇA belirtmek gerekir.
+            modelBuilder.Entity<Coupon>()
+                .Property(c => c.DiscountValue)
+                .HasPrecision(18, 2);
+
+            modelBuilder.Entity<Coupon>()
+                .Property(c => c.MinOrderAmount)
+                .HasPrecision(18, 2);
+
+            modelBuilder.Entity<Coupon>()
+                .Property(c => c.MaxDiscountAmount)
+                .HasPrecision(18, 2);
+
+            modelBuilder.Entity<CouponUsage>()
+                .Property(cu => cu.DiscountAmount)
+                .HasPrecision(18, 2);
+
+            modelBuilder.Entity<Order>()
+                .Property(o => o.SubTotal)
+                .HasPrecision(18, 2);
+
+            modelBuilder.Entity<Order>()
+                .Property(o => o.DiscountAmount)
+                .HasPrecision(18, 2);
 
         }
     }

@@ -14,10 +14,12 @@ namespace ETicaretAPI.Controllers
     public class OrdersController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly IConfiguration _config;     // ⭐ ekle
 
-        public OrdersController(AppDbContext context)
+        public OrdersController(AppDbContext context, IConfiguration config)
         {
             _context = context;
+            _config = config;                        // ⭐ ekle
         }
 
         private int GetUserId()
@@ -639,6 +641,115 @@ namespace ETicaretAPI.Controllers
                 odeme = odeme
             });
         }
+
+
+
+        // 🔴 GET /api/admin/orders/etiket?ids=5,7,12
+        //
+        // Kargo etiketi için gereken veriyi TOPLU döndürür.
+        //
+        // Neden tek tek /orders/{id} çağırmıyoruz?
+        //   20 sipariş için 20 istek olurdu. Bir istekte hepsini alıyoruz.
+        //   Ayrıca etiket detay sayfasından FARKLI veri istiyor:
+        //   ödeme durumu/iptal sebebi gerekmiyor, mağaza bilgisi gerekiyor.
+        [Authorize(Roles = "admin")]
+        [HttpGet("/api/admin/orders/etiket")]
+        public async Task<IActionResult> GetEtiketVerisi([FromQuery] string ids)
+        {
+            if (string.IsNullOrWhiteSpace(ids))
+            {
+                return BadRequest(new { mesaj = "En az bir sipariş seçmelisin." });
+            }
+
+            // "5,7,12" → [5, 7, 12]
+            // Sayıya çevrilemeyen parçaları sessizce atıyoruz (TryParse).
+            var idListesi = ids
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(p => int.TryParse(p.Trim(), out var n) ? n : 0)
+                .Where(n => n > 0)
+                .Distinct()
+                .Take(50)          // tek seferde en fazla 50 etiket
+                .ToList();
+
+            if (idListesi.Count == 0)
+            {
+                return BadRequest(new { mesaj = "Geçerli sipariş numarası bulunamadı." });
+            }
+
+            // Siparişler + müşteri bilgisi (tek sorgu)
+            var siparisler = await _context.Orders
+                .Where(o => idListesi.Contains(o.Id))
+                .Join(_context.Users,
+                      o => o.UserId,
+                      u => u.Id,
+                      (o, u) => new { o, u })
+                .Select(x => new
+                {
+                    id = x.o.Id,
+                    siparisNo = x.o.OrderNumber,
+                    tarih = x.o.CreatedAt,
+                    tutar = x.o.Total,
+
+                    // ⭐ DONDURULMUŞ adres — canlı Addresses tablosuna GİTMİYORUZ.
+                    // Müşteri adresini değiştirse bile etiket doğru yere gider.
+                    aliciAdi = x.o.ShippingFullName,
+                    adresBaslik = x.o.ShippingTitle,
+                    sehir = x.o.ShippingCity,
+                    acikAdres = x.o.ShippingFullAddress,
+
+                    // telefon = x.u.Phone,  // ⭐ commented out
+                    email = x.u.Email
+                })
+                .ToListAsync();
+
+            // Her siparişin kalem sayısı — tek sorguda hepsi (N+1 yok)
+            var kalemSayilari = await _context.OrderItems
+                .Where(oi => idListesi.Contains(oi.OrderId))
+                .GroupBy(oi => oi.OrderId)
+                .Select(g => new
+                {
+                    orderId = g.Key,
+                    cesit = g.Count(),
+                    adet = g.Sum(oi => oi.Quantity)
+                })
+                .ToListAsync();
+
+            // Bellekte eşleştir
+            var sonuc = siparisler.Select(s =>
+            {
+                var kalem = kalemSayilari.FirstOrDefault(k => k.orderId == s.id);
+
+                return new
+                {
+                    s.id,
+                    s.siparisNo,
+                    s.tarih,
+                    s.tutar,
+                    s.aliciAdi,
+                    s.adresBaslik,
+                    s.sehir,
+                    s.acikAdres,
+                    // telefon = x.u.Phone,  // ⭐ commented out
+                    s.email,
+                    urunCesidi = kalem?.cesit ?? 0,
+                    toplamAdet = kalem?.adet ?? 0
+                };
+            }).ToList();
+
+            // Gönderici bilgisi config'ten — koda gömülmüyor
+            var magaza = new
+            {
+                ad = _config["Magaza:Ad"] ?? "",
+                telefon = _config["Magaza:Telefon"] ?? "",
+                adres = _config["Magaza:Adres"] ?? ""
+            };
+
+            return Ok(new { magaza = magaza, etiketler = sonuc });
+        }
+
+
+
+
 
         // 🔴 PUT /api/admin/orders/5/status — kargo durumunu İLERLET
         [Authorize(Roles = "admin")]

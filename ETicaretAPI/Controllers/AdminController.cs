@@ -414,6 +414,87 @@ namespace ETicaretAPI.Controllers
             });
         }
 
+
+        // 🔴 GET /api/admin/dikkat-gerektirenler?gunEsigi=3
+        //
+        // Adminin "acilen bakmam gereken ne var?" sorusuna tek bakışta cevap.
+        //
+        // TASARIM KARARI: Her uyarı türü için ayrı alan döndürmüyoruz.
+        // Hepsini AYNI ŞEKİLDE bir "uyari" listesi olarak dönüyoruz:
+        //   { tur, baslik, adet, oncelik, ogeler[] }
+        // Böylece ileride destek/başvuru/iade uyarıları gelince buraya
+        // sadece yeni bir blok eklenir — EKRAN HİÇ DEĞİŞMEZ.
+        [HttpGet("dikkat-gerektirenler")]
+        public async Task<IActionResult> GetDikkatGerektirenler(int gunEsigi = 3)
+        {
+            var uyarilar = new List<object>();
+
+            // ---------- 1) UZUN SÜREDİR HAZIRLANIYOR ----------
+            // Eşikten daha eski ve hâlâ "hazirlaniyor" durumunda kalmış siparişler.
+            var esikTarihi = DateTime.UtcNow.AddDays(-gunEsigi);
+
+            var bekleyenSiparisler = await _context.Orders
+                .Where(o => o.Status == "hazirlaniyor" && o.CreatedAt < esikTarihi)
+                .OrderBy(o => o.CreatedAt) // en eskisi en üstte — en acili o
+                .Select(o => new
+                {
+                    id = o.Id,
+                    // siparisNo = o.OrderNumber,  // ⭐ senin projende bu satırı aç
+                    metin = "#" + o.Id,            // ⭐ ve burayı o.OrderNumber yap
+                    tarih = o.CreatedAt
+                })
+                .Take(10)
+                .ToListAsync();
+
+            if (bekleyenSiparisler.Count > 0)
+            {
+                uyarilar.Add(new
+                {
+                    tur = "bekleyen_siparis",
+                    baslik = $"{gunEsigi}+ gündür hazırlanıyor",
+                    adet = bekleyenSiparisler.Count,
+                    oncelik = "yuksek",
+                    // Ekranda tıklanınca gidilecek yer için ipucu
+                    hedef = "/siparisler",
+                    ogeler = bekleyenSiparisler
+                });
+            }
+
+            // ---------- 2) KRİTİK STOK ----------
+            var kritikStok = await _context.Products
+                .Where(p => p.Stock < 5)
+                .OrderBy(p => p.Stock) // en azı en üstte
+                .Select(p => new
+                {
+                    id = p.Id,
+                    metin = p.Name + " (" + p.Stock + " adet)",
+                    tarih = (DateTime?)null
+                })
+                .Take(10)
+                .ToListAsync();
+
+            if (kritikStok.Count > 0)
+            {
+                uyarilar.Add(new
+                {
+                    tur = "kritik_stok",
+                    baslik = "Kritik stok",
+                    adet = kritikStok.Count,
+                    oncelik = "orta",
+                    hedef = "/urunler",
+                    ogeler = kritikStok
+                });
+            }
+
+            // ---------- İLERİDE EKLENECEKLER ----------
+            // Aşama 7  → bekleyen admin başvuruları (sadece superadmin görsün)
+            // Aşama 11 → cevaplanmamış destek talepleri
+            // Aşama 12 → bekleyen iade talepleri
+            // Her biri yukarıdakiyle aynı kalıpta bir blok olacak.
+
+            return Ok(new { uyarilar = uyarilar });
+        }
+
         // ==========================================================
         //  KULLANICI YÖNETİMİ — SADECE SÜPER ADMİN
         // ==========================================================

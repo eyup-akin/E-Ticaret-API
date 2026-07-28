@@ -17,11 +17,18 @@
         public string ShippingFullAddress { get; set; } = string.Empty;
         public string ShippingPhone { get; set; } = string.Empty;   // ⭐ YENİ
 
+        // ⭐ KUPON — dondurulmuş indirim bilgisi
+        public decimal SubTotal { get; set; }                        // indirimden önceki tutar
+        public string CouponCode { get; set; } = string.Empty;       // boş = kupon yok
+        public decimal DiscountAmount { get; set; }                  // 0 = indirim yok
+
         public DateTime CreatedAt { get; set; }        // sipariş tarihi
         public string? CancelReason { get; set; }      // iptal sebebi (null = iptal değil)
         public DateTime? CancelledAt { get; set; }     // iptal tarihi
 
         public List<OrderItemDto> Items { get; set; } = new();
+
+       
     }
 
     // Sipariş içindeki her ürün satırı

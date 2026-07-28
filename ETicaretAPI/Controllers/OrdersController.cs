@@ -1,10 +1,11 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using ETicaretAPI.Data;
+using ETicaretAPI.DTOs;
+using ETicaretAPI.Models;
+using ETicaretAPI.Services;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
-using ETicaretAPI.Data;
-using ETicaretAPI.Models;
-using ETicaretAPI.DTOs;
 
 namespace ETicaretAPI.Controllers
 {
@@ -14,12 +15,17 @@ namespace ETicaretAPI.Controllers
     public class OrdersController : ControllerBase
     {
         private readonly AppDbContext _context;
-        private readonly IConfiguration _config;     // ⭐ ekle
+        private readonly IConfiguration _config;
+        private readonly KuponServisi _kuponServisi;     // ⭐
 
-        public OrdersController(AppDbContext context, IConfiguration config)
+        public OrdersController(
+            AppDbContext context,
+            IConfiguration config,
+            KuponServisi kuponServisi)                    // ⭐
         {
             _context = context;
-            _config = config;                        // ⭐ ekle
+            _config = config;
+            _kuponServisi = kuponServisi;                 // ⭐
         }
 
         private int GetUserId()
@@ -156,6 +162,56 @@ namespace ETicaretAPI.Controllers
                     toplamTutar += urun.Price * oge.Quantity;
                 }
 
+                // ---------- 5b) KUPON (varsa) ----------
+                //
+                // ⚠️ TRANSACTION İÇİNDE olması kritik: kupon kontrolü ile
+                // UsedCount artırımı arasında başka bir istek araya girerse
+                // limit aşılabilirdi (yarış koşulu). Transaction bu ikisini
+                // bölünemez tek bir işlem haline getiriyor.
+                decimal araToplam = toplamTutar;   // indirimden ÖNCEKİ tutar
+                decimal indirimTutari = 0;
+                string kullanilanKod = string.Empty;
+                Coupon? kullanilanKupon = null;
+
+                if (!string.IsNullOrWhiteSpace(dto.CouponCode))
+                {
+                    // Kupon hesabı için sepeti uygun biçime çevir
+                    var kuponSepeti = new List<SepetKalemi>();
+
+                    foreach (var oge in sepetOgeleri)
+                    {
+                        var u = await _context.Products.FindAsync(oge.ProductId);
+                        if (u != null)
+                        {
+                            kuponSepeti.Add(new SepetKalemi
+                            {
+                                ProductId = u.Id,
+                                CategoryId = u.CategoryId,
+                                Adet = oge.Quantity,
+                                BirimFiyat = u.Price
+                            });
+                        }
+                    }
+
+                    var kuponSonucu = await _kuponServisi
+                        .DogrulaAsync(dto.CouponCode, userId, kuponSepeti);
+
+                    if (!kuponSonucu.Gecerli)
+                    {
+                        // Kupon geçersizse siparişi HİÇ oluşturmuyoruz.
+                        // Sessizce indirimsiz devam etmek yanlış olurdu —
+                        // müşteri indirimli fiyat beklerken tam ödeme yapardı.
+                        await transaction.RollbackAsync();
+                        return BadRequest(new { mesaj = kuponSonucu.Mesaj });
+                    }
+
+                    indirimTutari = kuponSonucu.IndirimTutari;
+                    kullanilanKupon = kuponSonucu.Kupon;
+                    kullanilanKod = kuponSonucu.Kupon!.Code;
+
+                    toplamTutar = araToplam - indirimTutari;
+                }
+
                 // 6) Sipariş üst bilgisini oluştur
                 var siparis = new Order
                 {
@@ -176,7 +232,13 @@ namespace ETicaretAPI.Controllers
                     ShippingTitle = adres.Title,
                     ShippingCity = adres.City,
                     ShippingFullAddress = adres.FullAddress,
-                    ShippingPhone = adres.Phone        // ⭐
+                    ShippingPhone = adres.Phone,       // ⭐
+
+                    // ⭐ KUPON — dondurulmuş
+                    SubTotal = araToplam,
+                    CouponCode = kullanilanKod,
+                    DiscountAmount = indirimTutari
+
                 };
 
                 _context.Orders.Add(siparis);
@@ -187,6 +249,23 @@ namespace ETicaretAPI.Controllers
                 {
                     detay.OrderId = siparis.Id;
                     _context.OrderItems.Add(detay);
+                }
+
+                // 7b) KUPON KULLANIM KAYDI
+                if (kullanilanKupon != null)
+                {
+                    // Sayacı artır — bu satır transaction içinde olduğu için
+                    // eşzamanlı isteklerde tutarsızlık oluşmaz.
+                    kullanilanKupon.UsedCount++;
+
+                    _context.CouponUsages.Add(new CouponUsage
+                    {
+                        CouponId = kullanilanKupon.Id,
+                        UserId = userId,
+                        OrderId = siparis.Id,
+                        DiscountAmount = indirimTutari,
+                        UsedAt = DateTime.UtcNow
+                    });
                 }
 
                 // 8) Ödeme kaydı oluştur (simülasyon)
@@ -213,7 +292,10 @@ namespace ETicaretAPI.Controllers
                 {
                     mesaj = "Sipariş oluşturuldu ve ödeme alındı biladerim!",
                     siparisId = siparis.Id,
-                    siparisNo = siparis.OrderNumber,   // ⭐ mobil bunu gösterecek
+                    siparisNo = siparis.OrderNumber,
+                    araToplam = araToplam,           // ⭐
+                    indirim = indirimTutari,         // ⭐
+                    kuponKodu = kullanilanKod,       // ⭐
                     toplam = toplamTutar,
                     odemeDurumu = "odendi"
                 });
@@ -247,6 +329,10 @@ namespace ETicaretAPI.Controllers
                     ShippingCity = o.ShippingCity,
                     ShippingFullAddress = o.ShippingFullAddress,
                     ShippingPhone = o.ShippingPhone,          // ⭐
+
+                    SubTotal = o.SubTotal,
+                    CouponCode = o.CouponCode,
+                    DiscountAmount = o.DiscountAmount,
 
                     Total = o.Total,
 
@@ -315,6 +401,11 @@ namespace ETicaretAPI.Controllers
                 ShippingCity = order.ShippingCity,
                 ShippingFullAddress = order.ShippingFullAddress,
                 ShippingPhone = order.ShippingPhone,          // ⭐
+
+                SubTotal = order.SubTotal,
+                CouponCode = order.CouponCode,
+                DiscountAmount = order.DiscountAmount,
+
 
                 Total = order.Total,
 
@@ -629,6 +720,11 @@ namespace ETicaretAPI.Controllers
                 siparisNo = order.OrderNumber,   // ⭐
                 tarih = order.CreatedAt,
                 tutar = order.Total,
+
+                araToplam = order.SubTotal,
+                kuponKodu = order.CouponCode,
+                indirim = order.DiscountAmount,
+
                 durum = order.Status,
                 odemeDurumu = order.PaymentStatus,
                 kartSon4 = order.CardLast4,

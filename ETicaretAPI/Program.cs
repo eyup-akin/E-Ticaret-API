@@ -1,10 +1,10 @@
-using Microsoft.EntityFrameworkCore;
-using Microsoft.AspNetCore.Mvc;          // ⭐ YENİ — BadRequestObjectResult için
 using ETicaretAPI.Data;
 using ETicaretAPI.Middleware;            // ⭐ YENİ
-
-using Hangfire;
+using ETicaretAPI.Services;
 using ETicaretAPI.Support;
+using Hangfire;
+using Microsoft.AspNetCore.Mvc;          // ⭐ YENİ — BadRequestObjectResult için
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -176,6 +176,9 @@ builder.Services.AddRateLimiter(options =>
             "{\"mesaj\":\"Çok fazla deneme yaptın biladerim, lütfen biraz bekle.\"}", token);
     };
 });
+
+builder.Services.AddScoped<KuponServisi>();
+
 
 builder.Services.AddOpenApi();
 

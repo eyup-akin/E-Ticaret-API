@@ -517,9 +517,22 @@ namespace ETicaretAPI.Controllers
                     urunCesidi = _context.OrderItems.Count(oi => oi.OrderId == x.o.Id),
 
                     // Kaç ADET ürün (miktarların toplamı)
+                    // Kaç ADET ürün (miktarların toplamı)
                     toplamAdet = _context.OrderItems
                         .Where(oi => oi.OrderId == x.o.Id)
-                        .Sum(oi => (int?)oi.Quantity) ?? 0
+                        .Sum(oi => (int?)oi.Quantity) ?? 0,
+
+                    // ⭐ İLK 2 ÜRÜNÜN ADI — listede önizleme için.
+                    //    Tümünü değil sadece 2'sini çekiyoruz; gerisi detayda.
+                    //    Bu da alt sorgu olarak TEK SQL'e gömülür (N+1 yok).
+                    ilkUrunler = _context.OrderItems
+                        .Where(oi => oi.OrderId == x.o.Id)
+                        .Join(_context.Products,
+                              oi => oi.ProductId,
+                              p => p.Id,
+                              (oi, p) => p.Name)
+                        .Take(2)
+                        .ToList()
                 })
                 .ToListAsync();
 

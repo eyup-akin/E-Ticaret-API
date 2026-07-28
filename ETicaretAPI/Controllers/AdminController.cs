@@ -417,80 +417,96 @@ namespace ETicaretAPI.Controllers
 
         // 🔴 GET /api/admin/dikkat-gerektirenler?gunEsigi=3
         //
-        // Adminin "acilen bakmam gereken ne var?" sorusuna tek bakışta cevap.
+        // Adminin "acilen bakmam gereken ne var?" sorusuna cevap.
         //
-        // TASARIM KARARI: Her uyarı türü için ayrı alan döndürmüyoruz.
-        // Hepsini AYNI ŞEKİLDE bir "uyari" listesi olarak dönüyoruz:
-        //   { tur, baslik, adet, oncelik, ogeler[] }
-        // Böylece ileride destek/başvuru/iade uyarıları gelince buraya
-        // sadece yeni bir blok eklenir — EKRAN HİÇ DEĞİŞMEZ.
+        // TASARIM: Her uyarı türü AYNI şekilde dönüyor:
+        //   { tur, baslik, adet, oncelik, uyariOgeleri[] }
+        // Öğeler de aynı kalıpta: { metin, altMetin, sagMetin, link }
+        // Böylece ekran tek bir şablonla hepsini çizer; yeni uyarı türü
+        // eklendiğinde EKRAN HİÇ DEĞİŞMEZ.
         [HttpGet("dikkat-gerektirenler")]
         public async Task<IActionResult> GetDikkatGerektirenler(int gunEsigi = 3)
         {
             var uyarilar = new List<object>();
+            var simdi = DateTime.UtcNow;
 
             // ---------- 1) UZUN SÜREDİR HAZIRLANIYOR ----------
-            // Eşikten daha eski ve hâlâ "hazirlaniyor" durumunda kalmış siparişler.
-            var esikTarihi = DateTime.UtcNow.AddDays(-gunEsigi);
+            var esikTarihi = simdi.AddDays(-gunEsigi);
 
-            var bekleyenSiparisler = await _context.Orders
+            var bekleyenler = await _context.Orders
                 .Where(o => o.Status == "hazirlaniyor" && o.CreatedAt < esikTarihi)
-                .OrderBy(o => o.CreatedAt) // en eskisi en üstte — en acili o
-                .Select(o => new
+                .OrderBy(o => o.CreatedAt)            // en eski = en acil, üstte
+                .Join(_context.Users,
+                      o => o.UserId,
+                      u => u.Id,
+                      (o, u) => new { o, u })
+                .Select(x => new
                 {
-                    id = o.Id,
-                    // siparisNo = o.OrderNumber,  // ⭐ senin projende bu satırı aç
-                    metin = "#" + o.Id,            // ⭐ ve burayı o.OrderNumber yap
-                    tarih = o.CreatedAt
+                    metin = x.o.OrderNumber,          // SP-260713-0002
+                    altMetin = x.u.FullName,          // Müşteri adı
+                    tarih = x.o.CreatedAt,            // "kaç gündür" ekranda hesaplanacak
+                    tutar = x.o.Total,
+                    link = "/siparisler/" + x.o.Id    // tıklayınca gidilecek yer
                 })
-                .Take(10)
+                .Take(8)
                 .ToListAsync();
 
-            if (bekleyenSiparisler.Count > 0)
+            if (bekleyenler.Count > 0)
             {
                 uyarilar.Add(new
                 {
                     tur = "bekleyen_siparis",
-                    baslik = $"{gunEsigi}+ gündür hazırlanıyor",
-                    adet = bekleyenSiparisler.Count,
+                    baslik = "Bekleyen sipariş",
+                    ozet = bekleyenler.Count + " sipariş " + gunEsigi + "+ gündür hazırlanıyor",
+                    adet = bekleyenler.Count,
                     oncelik = "yuksek",
-                    // Ekranda tıklanınca gidilecek yer için ipucu
-                    hedef = "/siparisler",
-                    ogeler = bekleyenSiparisler
+                    tumunuGorLink = "/siparisler",
+                    ogeler = bekleyenler
                 });
             }
 
             // ---------- 2) KRİTİK STOK ----------
             var kritikStok = await _context.Products
                 .Where(p => p.Stock < 5)
-                .OrderBy(p => p.Stock) // en azı en üstte
-                .Select(p => new
+                .OrderBy(p => p.Stock)                // en azı en üstte
+                .Join(_context.Categories,
+                      p => p.CategoryId,
+                      c => c.Id,
+                      (p, c) => new { p, c })
+                .Select(x => new
                 {
-                    id = p.Id,
-                    metin = p.Name + " (" + p.Stock + " adet)",
-                    tarih = (DateTime?)null
+                    metin = x.p.Name,
+                    altMetin = x.c.Name,              // kategori adı
+                    tarih = (DateTime?)null,          // stok için tarih yok
+                    tutar = (decimal?)null,
+                    stok = x.p.Stock,                 // sağda "3 adet" diye görünecek
+                    link = "/urunler/" + x.p.Id + "/duzenle"
                 })
-                .Take(10)
+                .Take(8)
                 .ToListAsync();
 
             if (kritikStok.Count > 0)
             {
+                var tukenen = kritikStok.Count(k => k.stok == 0);
+
                 uyarilar.Add(new
                 {
                     tur = "kritik_stok",
                     baslik = "Kritik stok",
+                    ozet = tukenen > 0
+                        ? kritikStok.Count + " üründe stok azaldı (" + tukenen + " tanesi tükendi)"
+                        : kritikStok.Count + " üründe stok azaldı",
                     adet = kritikStok.Count,
-                    oncelik = "orta",
-                    hedef = "/urunler",
+                    oncelik = tukenen > 0 ? "yuksek" : "orta",
+                    tumunuGorLink = "/urunler",
                     ogeler = kritikStok
                 });
             }
 
             // ---------- İLERİDE EKLENECEKLER ----------
-            // Aşama 7  → bekleyen admin başvuruları (sadece superadmin görsün)
+            // Aşama 7  → bekleyen admin başvuruları (sadece superadmin)
             // Aşama 11 → cevaplanmamış destek talepleri
             // Aşama 12 → bekleyen iade talepleri
-            // Her biri yukarıdakiyle aynı kalıpta bir blok olacak.
 
             return Ok(new { uyarilar = uyarilar });
         }

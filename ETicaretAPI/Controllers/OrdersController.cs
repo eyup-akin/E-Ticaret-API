@@ -114,9 +114,26 @@ namespace ETicaretAPI.Controllers
                 return Unauthorized(new { mesaj = "Kullanıcı bulunamadı." });
             }
 
-            // 3) Sepeti al (ürün bilgisiyle birlikte)
+            // 3) Sepeti al
+            //
+            // ⭐ OrderBy(ProductId) DEADLOCK ÖNLEMİ — kozmetik değil, ZORUNLU.
+            //
+            // Aşağıda her ürünün stoğunu düşerken satır kilidi alıyoruz ve
+            // bu kilit transaction commit olana kadar tutuluyor. Sepette
+            // birden fazla ürün varsa birden fazla satır kilitleniyor.
+            //
+            // Sıralamasaydık şu olurdu:
+            //   Müşteri A sepeti [9, 5] → önce 9'u kilitler, sonra 5'i ister
+            //   Müşteri B sepeti [5, 9] → önce 5'i kilitler, sonra 9'u ister
+            //   → ikisi de birbirini bekler = DEADLOCK
+            //
+            // Herkes ProductId'ye göre artan sırada kilitlerse döngüsel
+            // bekleme oluşamaz. Biri diğerini kısa süre bekler, o kadar.
+            // Buna "lock ordering" denir ve eşzamanlı programlamanın
+            // temel kurallarındandır.
             var sepetOgeleri = await _context.CartItems
                 .Where(ci => ci.UserId == userId)
+                .OrderBy(ci => ci.ProductId)
                 .ToListAsync();
 
             if (sepetOgeleri.Count == 0)
@@ -132,9 +149,22 @@ namespace ETicaretAPI.Controllers
                 decimal toplamTutar = 0;
                 var siparisDetaylari = new List<OrderItem>();
 
-                // 5) Her sepet öğesi için: ürünü bul, stok kontrol et, fiyatı dondur
+                // 5) Her sepet öğesi için: ürünü bul, stoğu ATOMİK düş, fiyatı dondur
+                //
+                // ⚠️ ESKİ KOD YARIŞ KOŞULUNA AÇIKTI:
+                //       if (urun.Stock < oge.Quantity) return ...;   // OKU + KONTROL
+                //       urun.Stock -= oge.Quantity;                  // YAZ
+                //
+                //    Bu üç adım arasında boşluk var. İki istek aynı anda
+                //    gelirse ikisi de kontrolü geçip ikisi de yazabilir
+                //    (TOCTOU). Transaction bunu ÇÖZMEZ; SQL Server'ın
+                //    varsayılan yalıtımı READ COMMITTED'dır ve okuma kilidi
+                //    satır okunur okunmaz bırakılır.
+                //
+                //    Sonuç: son 1 ürün iki müşteriye birden satılabilirdi.
                 foreach (var oge in sepetOgeleri)
                 {
+                    // Ürünün adı ve fiyatı lazım (hata mesajı + fiyat dondurma).
                     var urun = await _context.Products.FindAsync(oge.ProductId);
 
                     if (urun == null)
@@ -142,24 +172,76 @@ namespace ETicaretAPI.Controllers
                         return BadRequest(new { mesaj = $"Ürün bulunamadı (id: {oge.ProductId})" });
                     }
 
-                    // Stok yeterli mi?
-                    if (urun.Stock < oge.Quantity)
+                    // Lambda içinde kullanacağımız için yerel değişkene alıyoruz.
+                    // Böylece EF'in ifade ağacına ne gireceği net görünüyor.
+                    var adet = oge.Quantity;
+
+                    // ⭐ ATOMİK STOK DÜŞÜRME
+                    //
+                    // Ürettiği SQL tek bir cümle:
+                    //     UPDATE Products
+                    //     SET Stock = Stock - @adet
+                    //     WHERE Id = @id AND Stock >= @adet
+                    //
+                    // Kontrol ve yazma AYNI cümlede olduğu için araya kimse
+                    // giremez: SQL Server satıra kilit koyar, koşulu
+                    // değerlendirir, yazar ve kilidi commit'e kadar tutar.
+                    //
+                    // Ayrıca WHERE koşulu stoğun negatife düşmesini de
+                    // veritabanı seviyesinde imkânsız kılıyor.
+                    var etkilenenSatir = await _context.Products
+                        .Where(p => p.Id == oge.ProductId && p.Stock >= adet)
+                        .ExecuteUpdateAsync(s => s.SetProperty(
+                            p => p.Stock,
+                            p => p.Stock - adet));
+
+                    // UPDATE kaç satırı etkiledi?
+                    //   1 → koşul tuttu, stok düşüldü
+                    //   0 → koşul tutmadı, stok yetersiz
+                    //
+                    // Ayrı bir SELECT'e gerek yok; cevap UPDATE'in kendisinden
+                    // geliyor. "Kontrol et sonra yaz" yerine "yazmayı dene,
+                    // sonucuna bak" yaklaşımı.
+                    if (etkilenenSatir == 0)
                     {
-                        return BadRequest(new { mesaj = $"'{urun.Name}' için yeterli stok yok! (stok: {urun.Stock})" });
+                        // Mesajda doğru sayıyı gösterebilmek için güncel stoğu
+                        // okuyoruz. urun.Stock KULLANILAMAZ — ExecuteUpdateAsync
+                        // change tracker'ı atladığı için bellekteki değer bayat.
+                        var guncelStok = await _context.Products
+                            .Where(p => p.Id == oge.ProductId)
+                            .Select(p => p.Stock)
+                            .FirstOrDefaultAsync();
+
+                        // return → using devreye girer → transaction rollback.
+                        // Bu öğeden ÖNCEKİ ürünlerin düşülen stokları geri gelir.
+                        return BadRequest(new
+                        {
+                            mesaj = $"'{urun.Name}' için yeterli stok yok! (kalan: {guncelStok})"
+                        });
                     }
 
-                    // Stoğu düş
-                    urun.Stock -= oge.Quantity;
+                    // ⚠️ DİKKAT — urun.Stock'a BİLEREK DOKUNMUYORUZ.
+                    //
+                    // ExecuteUpdateAsync veritabanını değiştirdi ama EF'in
+                    // bellekteki kopyasına haber vermedi. Burada
+                    // "urun.Stock -= adet" yazsaydık entity "Modified"
+                    // işaretlenir ve SaveChanges ayrıca bir UPDATE daha
+                    // gönderirdi — stok iki kez düşmüş olurdu.
+                    //
+                    // Dokunmadığımız için entity "Unchanged" kalıyor ve
+                    // SaveChanges bu satır için hiçbir SQL üretmiyor.
+                    //
+                    // Kural: ExecuteUpdate ile yazdığın kolona bellekte dokunma.
 
                     // Sipariş detayı oluştur — FİYATI DONDUR (o anki fiyat)
                     siparisDetaylari.Add(new OrderItem
                     {
                         ProductId = urun.Id,
-                        Quantity = oge.Quantity,
+                        Quantity = adet,
                         UnitPrice = urun.Price // o anki fiyat sabitlenir
                     });
 
-                    toplamTutar += urun.Price * oge.Quantity;
+                    toplamTutar += urun.Price * adet;
                 }
 
                 // ---------- 5b) KUPON (varsa) ----------

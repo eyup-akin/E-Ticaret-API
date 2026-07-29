@@ -306,7 +306,15 @@ namespace ETicaretAPI.Controllers
                         // Sessizce indirimsiz devam etmek yanlış olurdu —
                         // müşteri indirimli fiyat beklerken tam ödeme yapardı.
                         await transaction.RollbackAsync();
-                        return BadRequest(new { mesaj = kuponSonucu.Mesaj });
+
+                        // kod = programın okuyacağı sabit, mesaj = insanın okuyacağı metin.
+                        // Mobil taraf koda bakıp "kuponsuz devam edelim mi?" diye soracak.
+                        // Metne bakarak karar verseydi, mesaj her düzeltildiğinde kod bozulurdu.
+                        return BadRequest(new
+                        {
+                            mesaj = kuponSonucu.Mesaj,
+                            kod = "KUPON_GECERSIZ"
+                        });
                     }
 
                     indirimTutari = kuponSonucu.IndirimTutari;
@@ -352,7 +360,8 @@ namespace ETicaretAPI.Controllers
                         await transaction.RollbackAsync();
                         return BadRequest(new
                         {
-                            mesaj = "Bu kuponun kullanım hakkı dolmuş."
+                            mesaj = "Bu kuponun kullanım hakkı dolmuş.",
+                            kod = "KUPON_GECERSIZ"
                         });
                     }
 
@@ -387,7 +396,8 @@ namespace ETicaretAPI.Controllers
                         await transaction.RollbackAsync();
                         return BadRequest(new
                         {
-                            mesaj = "Bu kuponu daha önce kullandın."
+                            mesaj = "Bu kuponu daha önce kullandın.",
+                            kod = "KUPON_GECERSIZ"
                         });
                     }
                 }

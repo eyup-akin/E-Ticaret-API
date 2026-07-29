@@ -47,7 +47,27 @@ namespace ETicaretAPI.Controllers
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] RegisterDto dto)
         {
-            var emailVarMi = await _context.Users.AnyAsync(u => u.Email == dto.Email);
+            // ⭐ YENİ — E-POSTAYI NORMALLEŞTİR
+            //
+            // Neden? "  Ali@Mail.COM  " ile "ali@mail.com" aynı adrestir.
+            // Kullanıcı mobil klavyede baş harfi büyük yazabilir, kopyala-
+            // yapıştırda başa boşluk gelebilir.
+            //
+            // SQL Server'ın varsayılan harmanlaması harf duyarsız olduğu için
+            // unique index bunları zaten çakıştırırdı. Ama veriyi normalize
+            // ETMEK yine de doğru: veritabanında tek bir kanonik biçim durur,
+            // e-posta gönderirken/karşılaştırırken sürpriz olmaz ve harmanlama
+            // ileride değişse bile davranış bozulmaz.
+            var temizEmail = dto.Email.Trim().ToLowerInvariant();
+
+            // ⚠️ Bu kontrol yarış koşuluna AÇIK (TOCTOU): kontrol ile INSERT
+            // arasında başka bir istek araya girebilir. Asıl koruma aşağıdaki
+            // catch bloğundaki UNIQUE INDEX'tir.
+            //
+            // Peki bu kontrol niye duruyor? Çünkü %99 durumda hata buradan
+            // yakalanır ve kullanıcı net bir mesaj alır. Exception yolu
+            // hem daha pahalıdır hem de sadece nadir yarış durumu içindir.
+            var emailVarMi = await _context.Users.AnyAsync(u => u.Email == temizEmail);
             if (emailVarMi)
                 return BadRequest(new { mesaj = "Bu email zaten kayıtlı biladerim!" });
 
@@ -59,8 +79,8 @@ namespace ETicaretAPI.Controllers
 
             var yeniKullanici = new User
             {
-                FullName = dto.FullName,
-                Email = dto.Email,
+                FullName = dto.FullName.Trim(),
+                Email = temizEmail,                  // ⭐ normalize edilmiş hâli
                 PasswordHash = hashlenmisSifre,
                 Role = "customer",
 
@@ -71,7 +91,31 @@ namespace ETicaretAPI.Controllers
             };
 
             _context.Users.Add(yeniKullanici);
-            await _context.SaveChangesAsync();
+
+            // ⭐ YENİ — YARIŞ KOŞULU KALKANI
+            //
+            // Yukarıdaki AnyAsync kontrolünü geçmiş olsak bile, tam bu anda
+            // başka bir istek aynı e-postayı kaydetmiş olabilir. O durumda
+            // SQL Server unique index ihlali fırlatır ve EF bunu
+            // DbUpdateException olarak sarmalar.
+            //
+            // Bu bizim için bir HATA değil, beklenen bir durum — kullanıcıya
+            // aynı nazik mesajı veriyoruz. Yakalamasaydık global hata
+            // middleware'i devreye girip 500 dönerdi ve kullanıcı
+            // "sunucu hatası" görürdü.
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch (DbUpdateException)
+            {
+                // Not: Burada exception'ın gerçekten unique index ihlali
+                // olduğunu SQL hata numarasına (2601 / 2627) bakarak da
+                // doğrulayabilirdik. Bu metotta tek unique kısıt e-posta
+                // olduğu için gerek duymuyoruz; Users tablosuna ikinci bir
+                // unique kısıt eklenirse burayı gözden geçirmek gerekir.
+                return BadRequest(new { mesaj = "Bu email zaten kayıtlı biladerim!" });
+            }
 
             // ⭐ Doğrulama linkini kur ve (dev göndericiyle) gönder.
             // HAM token linke gider; DB'de yalnızca hash var → link sızsa bile
@@ -88,7 +132,6 @@ namespace ETicaretAPI.Controllers
 
             return Ok(new { mesaj = "Kayıt başarılı! Lütfen email adresine gelen linkle hesabını doğrula." });
         }
-
 
         // GET /api/auth/verify-email?token=xxxx
         // Kullanıcı maildeki linke TARAYICIDA tıklıyor.

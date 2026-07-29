@@ -85,13 +85,24 @@ builder.Services.AddAuthentication(options =>
 });
 
 
-// ⭐ YENİ — VALIDATION HATALARINI TEK TİPE ÇEVİR
-// [ApiController] normalde şöyle döndürür:
-//    { "errors": { "Price": ["Fiyat 0'dan büyük olmalı!"] }, "title": "...", "status": 400 }
-// Biz onu ezip şuna çeviriyoruz:
-//    { "mesaj": "Fiyat 0'dan büyük olmalı!" }
 builder.Services.AddControllers()
-    .ConfigureApiBehaviorOptions(options =>
+    // ⭐ YENİ — TÜM TARİHLER UTC OLARAK GİDİP GELSİN
+    //
+    // Neden burada? Çünkü API'nin dış dünyayla konuştuğu tek nokta
+    // serileştirme katmanı. Buraya bir kere yazınca 14 controller'ın
+    // tüm endpoint'leri düzeliyor — tek tek gezmeye gerek kalmıyor.
+    //
+    // Sıra önemli değil, ConfigureApiBehaviorOptions'tan önce ya da
+    // sonra olabilir; ikisi farklı şeyleri yapılandırıyor.
+    .AddJsonOptions(options =>
+    {
+    options.JsonSerializerOptions.Converters.Add(
+        new UtcTarihDonusturucu());
+
+    options.JsonSerializerOptions.Converters.Add(
+        new UtcTarihDonusturucuNullable());
+    })
+        .ConfigureApiBehaviorOptions(options =>
     {
         options.InvalidModelStateResponseFactory = context =>
         {

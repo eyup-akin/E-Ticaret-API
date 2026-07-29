@@ -142,6 +142,38 @@ namespace ETicaretAPI.Data
                 .Property(u => u.SifreSifirlamaTokenHash)
                 .HasMaxLength(64);
 
+            // ⭐ YENİ — E-POSTA BENZERSİZLİĞİ
+            //
+            // İKİ AYRI AYAR, İKİSİ DE ZORUNLU:
+            //
+            // 1) HasMaxLength(256)
+            //    Sınır belirtilmediğinde EF Core string'i nvarchar(max)
+            //    olarak eşliyor. SQL Server nvarchar(max) kolonuna index
+            //    KURAMAZ — index anahtarı için üst sınır 1700 bayt ve
+            //    max tipinin boyutu belirsiz (2 GB'a kadar).
+            //    256 seçtik çünkü RFC 5321 e-posta üst sınırını 254 karakter
+            //    olarak tanımlıyor. 256 × 2 bayt = 512 bayt → sınırın çok altı.
+            //
+            // 2) HasIndex().IsUnique()
+            //    Asıl koruma bu. Kayıt olurken AuthController'da AnyAsync ile
+            //    kontrol yapıyoruz ama o kontrol ile INSERT arasında bir
+            //    boşluk var (TOCTOU). İki istek aynı anda gelirse ikisi de
+            //    "yok" görüp ikisi de kaydeder.
+            //
+            //    Unique index bu boşluğu kapatır: kontrolü uygulama değil
+            //    VERİTABANI yapar ve bunu satır kilidi altında, INSERT ile
+            //    aynı atomik adımda yapar. Araya girmek fiziksel olarak
+            //    mümkün değildir.
+            //
+            //    Ek fayda: Login/şifre sıfırlamadaki e-posta aramaları da
+            //    hızlanır (tam tarama yerine index araması).
+            modelBuilder.Entity<User>()
+                .Property(u => u.Email)
+                .HasMaxLength(256);
+
+            modelBuilder.Entity<User>()
+                .HasIndex(u => u.Email)
+                .IsUnique();
 
 
             // ⭐ Kupon kodu benzersiz olmalı — aynı kod iki kez oluşturulamaz.

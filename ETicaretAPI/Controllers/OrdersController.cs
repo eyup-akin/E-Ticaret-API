@@ -164,10 +164,23 @@ namespace ETicaretAPI.Controllers
 
                 // ---------- 5b) KUPON (varsa) ----------
                 //
-                // ⚠️ TRANSACTION İÇİNDE olması kritik: kupon kontrolü ile
-                // UsedCount artırımı arasında başka bir istek araya girerse
-                // limit aşılabilirdi (yarış koşulu). Transaction bu ikisini
-                // bölünemez tek bir işlem haline getiriyor.
+                // ⚠️ TRANSACTION İÇİNDE olması kritik — ama neden olduğuna dikkat:
+                //
+                // Transaction burada ATOMİKLİK sağlıyor: kupon sayacı artışı,
+                // kullanım kaydı, sipariş ve ödeme ya hep birlikte yazılır ya hiç.
+                // Ortada yarım kalmış "sayaç arttı ama sipariş yok" durumu olmaz.
+                //
+                // ⚠️ AMA transaction yarış koşulunu ÇÖZMEZ. SQL Server'ın
+                // varsayılan yalıtım seviyesi READ COMMITTED'dır; okuma kilidi
+                // satır okunur okunmaz bırakılır. Yani iki istek aynı anda
+                // "UsedCount < UsageLimit" kontrolünü geçebilir ve ikisi de
+                // sayacı artırabilir → limit aşılır.
+                //
+                // Gerçek çözüm koşullu atomik UPDATE olurdu:
+                //   UPDATE Coupons SET UsedCount = UsedCount + 1
+                //   WHERE Id = @id AND (UsageLimit IS NULL OR UsedCount < UsageLimit)
+                // ve etkilenen satır sayısını kontrol etmek.
+                // Bilinen eksik olarak yol haritasına kaydedildi.
                 decimal araToplam = toplamTutar;   // indirimden ÖNCEKİ tutar
                 decimal indirimTutari = 0;
                 string kullanilanKod = string.Empty;

@@ -88,6 +88,30 @@ namespace ETicaretAPI.Services
                 return Gecersiz("Bu kuponun süresi dolmuş.");
             }
 
+
+            // ══════════════════════════════════════════════════════════
+            // ⚠️ AŞAĞIDAKİ İKİ KONTROL (5 ve 6) "TAVSİYE NİTELİĞİNDE"
+            //
+            // Bu iki kontrol yarış koşuluna AÇIKTIR: okuma ile kullanım
+            // arasında başka bir istek araya girebilir.
+            //
+            // İki farklı yerden çağrılıyoruz ve anlamları farklı:
+            //
+            //   1) POST /api/coupons/dogrula (sepette önizleme)
+            //      → Burada tek kontrol bunlar. Sorun değil, çünkü ortada
+            //        henüz bir sipariş yok; sadece "şu an durum ne" diyoruz.
+            //        Kullanıcı sipariş verene kadar durum değişebilir,
+            //        değişirse sipariş anında reddedilir.
+            //
+            //   2) POST /api/orders (gerçek sipariş)
+            //      → Burada BAĞLAYICI DEĞİL, sadece hızlı yol. Bağlayıcı
+            //        kontrol OrdersController'da, kupon satırı kilitliyken
+            //        yapılıyor (ExecuteUpdateAsync + kilit altında sayım).
+            //
+            // Yani desen: "iyimser yol + kalkan". Buradaki kontroller %99
+            // durumu ucuza eler ve nazik mesaj verir; gerçek koruma ise
+            // sipariş akışındaki atomik işlemlerdedir.
+            // ══════════════════════════════════════════════════════════
             // ---------- 5) TOPLAM KULLANIM LİMİTİ ----------
             if (kupon.UsageLimit.HasValue && kupon.UsedCount >= kupon.UsageLimit.Value)
             {

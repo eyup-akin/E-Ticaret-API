@@ -288,6 +288,15 @@ namespace ETicaretAPI.Controllers
                         }
                     }
 
+                    // ---- ADIM 1: DEĞER KONTROLLERİ ----
+                    // Tarih, aktiflik, kategori, minimum tutar ve indirim hesabı.
+                    // Bunlar sadece OKUMA yapan kontroller; yarış koşulundan
+                    // etkilenmezler çünkü ortada güncellenen bir sayaç yok.
+                    //
+                    // ⚠️ DogrulaAsync içindeki 5. adım (toplam limit) ve
+                    //    6. adım (kişi başı limit) kontrolleri BURADA
+                    //    BAĞLAYICI DEĞİL — onlar "hızlı yol" kontrolleri.
+                    //    Bağlayıcı kontrol aşağıda, kilit altında yapılıyor.
                     var kuponSonucu = await _kuponServisi
                         .DogrulaAsync(dto.CouponCode, userId, kuponSepeti);
 
@@ -305,6 +314,82 @@ namespace ETicaretAPI.Controllers
                     kullanilanKod = kuponSonucu.Kupon!.Code;
 
                     toplamTutar = araToplam - indirimTutari;
+
+
+                    // ---- ADIM 2: TOPLAM LİMİTİ ATOMİK OLARAK TÜKET ----
+                    //
+                    // Ürettiği SQL:
+                    //     UPDATE Coupons
+                    //     SET UsedCount = UsedCount + 1
+                    //     WHERE Id = @id
+                    //       AND (UsageLimit IS NULL OR UsedCount < UsageLimit)
+                    //
+                    // Stoktaki desenin aynısı: kontrol ve yazma tek cümlede,
+                    // satır kilidi altında. Araya girilemez.
+                    //
+                    // "UsageLimit IS NULL" kısmı limitsiz kuponlar için:
+                    // koşul her zaman doğru olsun ki sayaç yine de artsın
+                    // (istatistik ve raporlar için lazım).
+                    //
+                    // ⭐ BU SATIRIN İKİNCİ VE DAHA ÖNEMLİ GÖREVİ:
+                    //    Kupon satırına exclusive kilit koyuyor ve bu kilit
+                    //    COMMIT'e kadar tutuluyor. Aynı kuponla gelen ikinci
+                    //    istek tam burada kuyruğa giriyor. Bir sonraki adımda
+                    //    buna dayanacağız.
+                    var kuponEtkilenen = await _context.Coupons
+                        .Where(c => c.Id == kullanilanKupon.Id
+                                 && (c.UsageLimit == null || c.UsedCount < c.UsageLimit))
+                        .ExecuteUpdateAsync(s => s.SetProperty(
+                            c => c.UsedCount,
+                            c => c.UsedCount + 1));
+
+                    if (kuponEtkilenen == 0)
+                    {
+                        // Koşul tutmadı → limit dolmuş.
+                        // Rollback'i açıkça çağırıyoruz: kilitler metot
+                        // bitmesini beklemeden hemen serbest kalsın.
+                        // (using zaten yapardı ama bir tık daha erken.)
+                        await transaction.RollbackAsync();
+                        return BadRequest(new
+                        {
+                            mesaj = "Bu kuponun kullanım hakkı dolmuş."
+                        });
+                    }
+
+
+                    // ---- ADIM 3: KİŞİ BAŞI LİMİT (kilit altında) ----
+                    //
+                    // ⭐ BU SAYIM NEDEN GÜVENİLİR?
+                    //
+                    // Yukarıdaki UPDATE kupon satırını kilitledi. Aynı kuponu
+                    // kullanan başka bir istek varsa o, UPDATE satırında
+                    // bekliyor — buraya kadar gelemedi.
+                    //
+                    // Yani biz sayarken, aynı kuponla ilgili başka hiçbir
+                    // işlem ilerlemiyor. Bizden önce commit etmiş istekler
+                    // ise CouponUsages'a kayıtlarını çoktan yazmış durumda,
+                    // dolayısıyla sayımımız onları görüyor.
+                    //
+                    // Kupon satırı burada bir MUTEX görevi görüyor.
+                    //
+                    // Genel prensip: birden fazla satırı ilgilendiren bir
+                    // kuralı korumak istiyorsan, onların bağlı olduğu
+                    // "ebeveyn" kaydı kilitle. Var olmayan satırları
+                    // kilitleyemezsin ama ebeveynlerini kilitleyebilirsin.
+                    var kisiselKullanim = await _context.CouponUsages
+                        .CountAsync(cu => cu.CouponId == kullanilanKupon.Id
+                                       && cu.UserId == userId);
+
+                    if (kisiselKullanim >= kullanilanKupon.UsageLimitPerUser)
+                    {
+                        // Rollback, ADIM 2'deki sayaç artışını da geri alır.
+                        // Yani reddedilen bir sipariş kuponun hakkını yemez.
+                        await transaction.RollbackAsync();
+                        return BadRequest(new
+                        {
+                            mesaj = "Bu kuponu daha önce kullandın."
+                        });
+                    }
                 }
 
                 // 6) Sipariş üst bilgisini oluştur
@@ -349,10 +434,22 @@ namespace ETicaretAPI.Controllers
                 // 7b) KUPON KULLANIM KAYDI
                 if (kullanilanKupon != null)
                 {
-                    // Sayacı artır — bu satır transaction içinde olduğu için
-                    // eşzamanlı isteklerde tutarsızlık oluşmaz.
-                    kullanilanKupon.UsedCount++;
-
+                    // ⚠️ SAYAÇ BURADA ARTIRILMIYOR — yukarıda ADIM 2'de
+                    //    ExecuteUpdateAsync ile atomik olarak artırıldı.
+                    //
+                    //    Eskiden burada "kullanilanKupon.UsedCount++" vardı.
+                    //    Kaldırdık çünkü:
+                    //      1) O yazım yarış koşuluna açıktı (oku-artır-yaz)
+                    //      2) ExecuteUpdateAsync change tracker'ı atlıyor;
+                    //         burada da artırsaydık SaveChanges ikinci bir
+                    //         UPDATE gönderir ve sayaç İKİ KEZ artardı
+                    //
+                    //    Kural: ExecuteUpdate ile yazdığın kolona bellekte
+                    //    dokunma. (Stok düşürmede de aynı kural geçerli.)
+                    //
+                    //    Buradaki INSERT ise kilit altında yapılıyor ve
+                    //    kişi başı limitin bir sonraki isteği doğru
+                    //    saymasını sağlıyor.
                     _context.CouponUsages.Add(new CouponUsage
                     {
                         CouponId = kullanilanKupon.Id,

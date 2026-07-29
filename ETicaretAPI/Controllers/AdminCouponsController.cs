@@ -110,7 +110,7 @@ namespace ETicaretAPI.Controllers
 
                 "pasif" => query.Where(c => !c.IsActive),
 
-                "beklemede" => query.Where(c =>
+                "baslamadi" => query.Where(c =>
                     c.IsActive &&
                     c.StartsAt > simdi),
 
@@ -700,7 +700,7 @@ namespace ETicaretAPI.Controllers
 
             if (simdi < startsAt)
             {
-                return "beklemede";
+                return "baslamadi";
             }
 
             if (usageLimit.HasValue && usedCount >= usageLimit.Value)

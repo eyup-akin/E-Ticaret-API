@@ -175,6 +175,31 @@ namespace ETicaretAPI.Data
                 .HasIndex(u => u.Email)
                 .IsUnique();
 
+            // ⭐ YENİ — SEPETTE AYNI ÜRÜN İKİ KEZ OLAMAZ
+            //
+            // Neden bileşik (composite) indeks?
+            //   Kural "bir kullanıcının sepetinde bir ürün en fazla bir satır"
+            //   şeklinde. Tek başına UserId benzersiz olamaz (bir kullanıcının
+            //   çok ürünü var), tek başına ProductId de olamaz (bir ürün çok
+            //   kullanıcının sepetinde). Benzersiz olan İKİLİ.
+            //
+            // Neden gerekli?
+            //   AddToCart'ta "sepette var mı" kontrolü ile INSERT arasında
+            //   boşluk var (TOCTOU). İki istek aynı anda gelirse ikisi de
+            //   "yok" görüp ikisi de ekler → aynı ürün sepette iki satır.
+            //   Müşteri ürünü iki kez görür, birini silse diğeri kalır,
+            //   kupon hesabında ürün iki kez sayılır.
+            //
+            // Ek fayda: (UserId, ProductId) ile yapılan aramalar hızlanır —
+            // AddToCart her çağrıldığında tam bu ikiliyle sorgu atıyor.
+            //
+            // Kolon sırası önemli: UserId önce, çünkü "bir kullanıcının tüm
+            // sepeti" sorgusu da bu indeksten faydalanabilir. Tersi olsaydı
+            // (ProductId, UserId) o sorgu indeksi kullanamazdı.
+            modelBuilder.Entity<CartItem>()
+                .HasIndex(c => new { c.UserId, c.ProductId })
+                .IsUnique();
+
 
             // ⭐ Kupon kodu benzersiz olmalı — aynı kod iki kez oluşturulamaz.
             // Kodu her zaman BÜYÜK harfe çevirip kaydediyoruz, o yüzden

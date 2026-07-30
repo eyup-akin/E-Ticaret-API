@@ -389,7 +389,14 @@ namespace ETicaretAPI.Controllers
                       u => u.Id,
                       (o, u) => new
                       {
+                          // id: React'in key prop'u ve ileride detay linki için gerekli
                           id = o.Id,
+
+                          // ⭐ siparisNo: EKRANDA GÖSTERİLEN numara.
+                          // Teknik anahtar (Id) ile iş anahtarı (OrderNumber) ayrımı —
+                          // Aşama 2'de koyduğumuz kural. Id iç kullanım, OrderNumber
+                          // müşteriyle konuşulan numara.
+                          siparisNo = o.OrderNumber,
                           musteri = u.FullName,
                           tutar = o.Total,
                           durum = o.Status,

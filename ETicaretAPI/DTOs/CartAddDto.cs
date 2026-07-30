@@ -7,7 +7,10 @@ namespace ETicaretAPI.DTOs
         [Range(1, int.MaxValue, ErrorMessage = "Geçerli bir ürün seçilmeli!")]
         public int ProductId { get; set; }
 
-        [Range(1, 1000, ErrorMessage = "Adet en az 1 olmalı!")]
+        // Üst sınır 99: mobil arayüzdeki adet seçici de 99'da duruyor.
+        // Üç katman (arayüz, DTO, veritabanı kırpması) aynı sayıyı bilmeli;
+        // farklı olsalar arayüzde kabul edilen bir değer sunucuda reddedilirdi.
+        [Range(1, 99, ErrorMessage = "Adet 1 ile 99 arasında olmalı!")]
         public int Quantity { get; set; }
     }
 }

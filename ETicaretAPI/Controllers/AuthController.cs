@@ -28,6 +28,23 @@ namespace ETicaretAPI.Controllers
         private const int SifirlamaSaat = 1;     // ⭐ YENİ — sıfırlama linki 1 saat geçerli
 
 
+        // ⭐ YENİ — Token'daki kullanıcı kimliğini okur.
+        //
+        // Neden istekten değil token'dan?
+        //   Token JWT ve sunucunun gizli anahtarıyla imzalı — içeriği
+        //   değiştirilemez. İstek gövdesindeki bir "userId" ise istemcinin
+        //   yazdığı düz metindir; biri başkasının id'sini yazıp onun
+        //   şifresini değiştirmeyi denerdi.
+        //
+        // "!" işareti: [Authorize] geçildiyse bu claim kesin vardır.
+        // Yoksa endpoint'e hiç girilemezdi.
+        private int GetUserId()
+        {
+            return int.Parse(
+                User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);
+        }
+
+
         private readonly ETicaretAPI.Services.IEmailGonderici _email;
         private readonly IConfiguration _config;
 
@@ -475,6 +492,192 @@ namespace ETicaretAPI.Controllers
 
             return Ok(kullanici);
         }
+
+
+        // ⭐ YENİ — POST /api/auth/change-password
+        //
+        // Giriş yapmış kullanıcının kendi şifresini değiştirmesi.
+        //
+        // "Şifremi unuttum" akışından farkı:
+        //   forgot/reset  → maille gelen tek kullanımlık token ile, giriş
+        //                   yapmadan. Şifreyi HATIRLAMAYAN kullanıcı için.
+        //   change        → oturum + eski şifre ile. Şifreyi bilen ama
+        //                   değiştirmek isteyen kullanıcı için.
+        //
+        // Rate limit neden var? Saldırgan bir şekilde access token ele
+        // geçirdiyse, eski şifreyi deneme yanılma ile bulmaya çalışabilir.
+        // Dakikada 5 deneme bunu pratikte imkânsız kılar.
+        [Microsoft.AspNetCore.Authorization.Authorize]
+        [EnableRateLimiting("giris")]
+        [HttpPost("change-password")]
+        public async Task<IActionResult> ChangePassword([FromBody] SifreDegistirDto dto)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var userId = GetUserId();
+
+            var kullanici = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
+
+            if (kullanici == null || !kullanici.IsActive)
+                return Unauthorized(new { mesaj = "Oturum geçersiz. Lütfen tekrar giriş yap." });
+
+            // ---------- 1) ESKİ ŞİFREYİ DOĞRULA ----------
+            //
+            // BCrypt.Verify hash'i geri çözmez — girilen şifreyi aynı tuzla
+            // (salt) yeniden hash'leyip sonucu karşılaştırır. Hash tek yönlüdür.
+            var eskiDogruMu = BCrypt.Net.BCrypt.Verify(dto.EskiSifre, kullanici.PasswordHash);
+
+            if (!eskiDogruMu)
+            {
+                // Mesajda "eski şifre yanlış" demek sorun değil — kullanıcı
+                // zaten kendi hesabında. Login'deki "gizleme" mantığı burada
+                // geçerli değil, orada hesabın VARLIĞINI sızdırmamak içindi.
+                return BadRequest(new { mesaj = "Mevcut şifren yanlış." });
+            }
+
+            // ---------- 2) YENİ ŞİFRE ESKİSİYLE AYNI OLMASIN ----------
+            //
+            // Kullanıcı yanlışlıkla aynı şifreyi yazdıysa uyaralım. Aksi halde
+            // "şifren değişti" der, hiçbir şey değişmemiş olur ve üstelik
+            // diğer cihazlardaki oturumları boşuna düşürmüş oluruz.
+            if (BCrypt.Net.BCrypt.Verify(dto.YeniSifre, kullanici.PasswordHash))
+            {
+                return BadRequest(new
+                {
+                    mesaj = "Yeni şifre eskisiyle aynı olamaz."
+                });
+            }
+
+            // ---------- 3) YENİ ŞİFREYİ KAYDET ----------
+            kullanici.PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.YeniSifre);
+
+            // ---------- 4) GÜVENLİK DAMGASINI YENİLE ----------
+            //
+            // Damga JWT'nin içinde "stamp" claim'i olarak taşınıyor.
+            // GuvenlikDamgasiMiddleware her istekte token'daki damgayı
+            // veritabanındakiyle karşılaştırıyor.
+            //
+            // Damgayı değiştirince ELDEKİ TÜM access token'lar anında
+            // geçersizleşir — 15 dakika beklemeye gerek kalmaz.
+            //
+            // reset-password endpoint'i de aynısını yapıyor: tutarlılık.
+            kullanici.SecurityStamp = Guid.NewGuid().ToString();
+
+            // ---------- 5) TÜM REFRESH TOKEN'LARI İPTAL ET ----------
+            //
+            // Access token 15 dakikalık, damga ile hemen öldü. Ama refresh
+            // token 30 gün ömürlü ve damga kontrolünden geçmiyor — onları
+            // ayrıca iptal etmek ZORUNDAYIZ. Yoksa saldırgan refresh ile
+            // yeni access alıp devam ederdi.
+            //
+            // ⚠️ SIRA KRİTİK: Bu adım, aşağıda kendi yeni token'ımızı
+            //    üretmeden ÖNCE olmalı. Sonra yapsaydık kendi token'ımızı
+            //    da iptal etmiş olurduk.
+            await KullanicininTumTokenleriniIptalEt(kullanici.Id);
+
+            await _context.SaveChangesAsync();
+
+            // ---------- 6) BU CİHAZ İÇİN YENİ TOKEN ÇİFTİ ----------
+            //
+            // KARAR: Şifreyi değiştiren kişi hem eski hem yeni şifreyi
+            // biliyor — kimliğini kanıtlamış durumda. Onu çıkışa atmak
+            // güvenlik kazancı sağlamaz, sadece rahatsız eder.
+            //
+            // Diğer cihazlar düştü (adım 4-5), bu cihaz devam ediyor.
+            // Gmail, GitHub ve banka uygulamaları da böyle davranır.
+            //
+            // Alternatif: hiç token döndürmeyip kullanıcıyı giriş ekranına
+            // atmak. Daha basit olurdu ama kötü deneyim.
+            var yeniRefresh = await RefreshUretVeKaydet(kullanici.Id);
+            var yeniAccess = _tokenService.TokenUret(kullanici);
+
+            // ---------- 7) BİLGİLENDİRME MAİLİ ----------
+            //
+            // Şifre değişikliği bir GÜVENLİK OLAYIDIR. Kullanıcı bunu
+            // yapmadıysa haberdar olmalı — hesabı ele geçirilmiş demektir.
+            //
+            // try/catch içinde: mail gönderilemezse şifre değişikliği
+            // GEÇERLİ kalmalı. Mail bir bildirimdir, işlemin parçası değil.
+            // Bunu yapmasaydık SMTP sunucusu çökünce kullanıcılar şifre
+            // değiştiremez hale gelirdi.
+            try
+            {
+                var govde =
+                    $"<p>Merhaba {kullanici.FullName},</p>" +
+                    "<p>Hesabının şifresi değiştirildi ve diğer tüm " +
+                    "cihazlardaki oturumların kapatıldı.</p>" +
+                    "<p>Bu işlemi sen yapmadıysan hemen \"Şifremi Unuttum\" " +
+                    "ile şifreni sıfırla.</p>";
+
+                await _email.GonderAsync(kullanici.Email, "Şifren Değiştirildi", govde);
+            }
+            catch
+            {
+                // Sessizce yut — kullanıcının işlemi başarılı oldu.
+            }
+
+            return Ok(new
+            {
+                mesaj = "Şifren güncellendi. Diğer cihazlardaki oturumların kapatıldı.",
+                token = yeniAccess,
+                refreshToken = yeniRefresh
+            });
+        }
+
+
+        // ⭐ YENİ — PUT /api/auth/profil
+        //
+        // Şu an sadece ad soyad değiştirilebiliyor.
+        //
+        // Neden SecurityStamp yenilemiyoruz?
+        //   Damga yenilemek "eldeki tüm token'ları öldür" demek. Bu ağır
+        //   bir işlem ve yalnızca GÜVENLİK durumu değiştiğinde yapılır:
+        //   şifre değişikliği, rol değişikliği, hesap pasifleştirme.
+        //
+        //   Ad soyad değişikliği güvenlik durumunu etkilemiyor. Damgayı
+        //   yenilesek kullanıcı adını her düzelttiğinde tüm cihazlarından
+        //   düşerdi — sebepsiz bir ceza.
+        //
+        // JWT'de FullName claim'i YOK (TokenService'e baktım: sadece Id,
+        // Email, rol ve damga var). Yani token'ın tazelenmesi de gerekmiyor.
+        // İstemci kendi sakladığı kopyayı cevaptan güncelleyecek.
+        [Microsoft.AspNetCore.Authorization.Authorize]
+        [HttpPut("profil")]
+        public async Task<IActionResult> ProfilGuncelle([FromBody] ProfilGuncelleDto dto)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var userId = GetUserId();
+
+            var kullanici = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
+
+            if (kullanici == null || !kullanici.IsActive)
+                return Unauthorized(new { mesaj = "Oturum geçersiz. Lütfen tekrar giriş yap." });
+
+            // Trim: baştaki/sondaki boşluk temizlensin. Kayıt olurken de
+            // aynısını yapıyoruz (Register'da FullName.Trim()) — tutarlılık.
+            kullanici.FullName = dto.FullName.Trim();
+
+            await _context.SaveChangesAsync();
+
+            // Güncellenmiş profili döndürüyoruz.
+            //
+            // Neden sadece "başarılı" demiyoruz? Çünkü istemci ekranda
+            // gösterdiği kopyayı güncellemek zorunda. Cevapta veriyi
+            // dönersek istemci ayrıca bir GET isteği atmak zorunda kalmaz —
+            // bir ağ turu kazanırız.
+            return Ok(new
+            {
+                mesaj = "Profilin güncellendi biladerim!",
+                id = kullanici.Id,
+                fullName = kullanici.FullName,
+                email = kullanici.Email,
+                role = kullanici.Role
+            });
+        }
+
 
         // ---------- YARDIMCILAR ----------
 

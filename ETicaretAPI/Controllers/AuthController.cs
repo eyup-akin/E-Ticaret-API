@@ -887,6 +887,165 @@ namespace ETicaretAPI.Controllers
         }
 
 
+        // ⭐ YENİ — POST /api/auth/oturumlarim
+        //
+        // Kullanıcının AKTİF oturumlarını listeler.
+        //
+        // NEDEN GET DEĞİL POST?
+        //   İstek gövdesinde refresh token taşıyoruz — "hangi satır bu
+        //   cihaz" sorusunu cevaplamak için gerekli.
+        //
+        //   Sorgu dizesine koysaydık (?refreshToken=...) o sır sunucu
+        //   erişim günlüklerine, proxy loglarına ve tarayıcı geçmişine
+        //   yazılırdı. GET gövdesi ise HTTP'de tanımsız (hesap kapatmada
+        //   da bu yüzden POST seçtik).
+        //
+        // ⚠️ TokenHash CEVAPTA DÖNMÜYOR. Hash'ten ham token üretilemez ama
+        //    yine de sızdırmıyoruz: dışarıya sadece işi olan veri gider.
+        [Microsoft.AspNetCore.Authorization.Authorize]
+        [HttpPost("oturumlarim")]
+        public async Task<IActionResult> Oturumlarim([FromBody] RefreshRequestDto dto)
+        {
+            var userId = GetUserId();
+            var simdi = DateTime.UtcNow;
+
+            // İstemci refresh token gönderdiyse hash'ini hesapla.
+            // Göndermezse (boş string) hiçbir satır "bu cihaz" işaretlenmez —
+            // liste yine çalışır, sadece etiket olmaz.
+            string? buCihazHash = string.IsNullOrWhiteSpace(dto.RefreshToken)
+                ? null
+                : _tokenService.Hashle(dto.RefreshToken);
+
+            // Aktif = iptal edilmemiş VE süresi dolmamış.
+            //
+            // RefreshToken modelinde bunu anlatan bir "Aktif" özelliği var
+            // ama [NotMapped] — yani veritabanı kolonu değil, C# hesaplaması.
+            // EF Core onu SQL'e çeviremez, o yüzden koşulu burada elle
+            // yazıyoruz. (Kupon durumunda da aynı durumla karşılaşmıştık.)
+            var oturumlar = await _context.RefreshTokens
+                .Where(t => t.UserId == userId
+                         && t.RevokedAt == null
+                         && t.ExpiresAt > simdi)
+                .OrderByDescending(t => t.CreatedAt)
+                .Select(t => new
+                {
+                    t.Id,
+                    t.CihazBilgisi,
+                    t.CreatedAt,
+                    t.ExpiresAt,
+
+                    // Hash karşılaştırması SQL'de yapılıyor (EF bunu CASE
+                    // WHEN'e çeviriyor). Belleğe çekip karşılaştırmaya gerek yok.
+                    buCihaz = buCihazHash != null && t.TokenHash == buCihazHash
+                })
+                .ToListAsync();
+
+            return Ok(new
+            {
+                oturumlar = oturumlar,
+                toplam = oturumlar.Count
+            });
+        }
+
+
+        // ⭐ YENİ — POST /api/auth/oturum-iptal/5
+        //
+        // Tek bir oturumu kapatır. "Bu cihazı tanımıyorum" durumu için.
+        [Microsoft.AspNetCore.Authorization.Authorize]
+        [HttpPost("oturum-iptal/{id}")]
+        public async Task<IActionResult> OturumIptal(int id)
+        {
+            var userId = GetUserId();
+
+            // ⚠️⚠️ BURADAKİ "&& t.UserId == userId" HAYATİ ÖNEMDE.
+            //
+            // Olmasaydı: giriş yapmış HERHANGİ bir kullanıcı, id'leri
+            // deneyerek BAŞKASININ oturumunu kapatabilirdi. 1'den 1000'e
+            // kadar bir döngü yazan biri tüm kullanıcıları sistemden atardı.
+            //
+            // Bu açığın adı IDOR (Insecure Direct Object Reference) —
+            // "güvensiz doğrudan nesne referansı". OWASP'ın en sık görülen
+            // açıkları listesinde üst sıralarda.
+            //
+            // Kural: bir kaydı id ile getirirken SAHİPLİK kontrolü de aynı
+            // sorguya girmeli. Ayrı bir if ile sonradan kontrol etmek de
+            // olur ama tek sorguda yapmak unutma riskini sıfırlıyor.
+            var oturum = await _context.RefreshTokens
+                .FirstOrDefaultAsync(t => t.Id == id && t.UserId == userId);
+
+            if (oturum == null)
+            {
+                // Başkasının oturumu da buraya düşer ve "bulunamadı" der.
+                // "Bu senin değil" demek, o id'de bir kaydın VAR olduğunu
+                // sızdırırdı. Yokmuş gibi davranmak daha güvenli.
+                return NotFound(new { mesaj = "Oturum bulunamadı." });
+            }
+
+            if (oturum.RevokedAt != null)
+            {
+                // Zaten kapalı. Hata değil — kullanıcı iki sekmeden aynı
+                // butona basmış olabilir. İdempotent davranıyoruz.
+                return Ok(new { mesaj = "Bu oturum zaten kapatılmış." });
+            }
+
+            oturum.RevokedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            return Ok(new { mesaj = "Oturum kapatıldı." });
+        }
+
+
+        // ⭐ YENİ — POST /api/auth/diger-oturumlari-kapat
+        //
+        // Bu cihaz HARİÇ tüm oturumları kapatır.
+        // "Şüpheli bir şey var, her yerden çıkış yapayım ama burada kalayım."
+        [Microsoft.AspNetCore.Authorization.Authorize]
+        [HttpPost("diger-oturumlari-kapat")]
+        public async Task<IActionResult> DigerOturumlariKapat(
+            [FromBody] RefreshRequestDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.RefreshToken))
+            {
+                // Refresh token olmadan "hangisini koruyacağımızı" bilemeyiz.
+                // Boş gelirse hepsini kapatmak, kullanıcıyı kendi tıkladığı
+                // cihazdan da atmak olurdu — istenmeyen sürpriz.
+                return BadRequest(new
+                {
+                    mesaj = "Bu cihaz belirlenemedi. Sayfayı yenileyip tekrar dene."
+                });
+            }
+
+            var userId = GetUserId();
+            var buCihazHash = _tokenService.Hashle(dto.RefreshToken);
+            var simdi = DateTime.UtcNow;
+
+            // ExecuteUpdateAsync: tek SQL cümlesiyle güncelliyor.
+            //
+            // Klasik yol: hepsini belleğe çek → foreach ile RevokedAt ata →
+            //             SaveChanges → EF her satır için ayrı UPDATE
+            // Bu yol:     UPDATE RefreshTokens SET RevokedAt = @simdi
+            //             WHERE UserId = @id AND RevokedAt IS NULL
+            //               AND TokenHash <> @buCihaz
+            //
+            // 30 oturumu olan kullanıcıda 31 sorgu yerine 1 sorgu.
+            // Stok ve kupon düzeltmelerinde kullandığımız aracın aynısı.
+            var etkilenen = await _context.RefreshTokens
+                .Where(t => t.UserId == userId
+                         && t.RevokedAt == null
+                         && t.TokenHash != buCihazHash)
+                .ExecuteUpdateAsync(s => s.SetProperty(
+                    t => t.RevokedAt,
+                    (DateTime?)simdi));
+
+            return Ok(new
+            {
+                mesaj = etkilenen == 0
+                    ? "Kapatılacak başka oturum yoktu."
+                    : $"{etkilenen} oturum kapatıldı.",
+                kapatilan = etkilenen
+            });
+        }
+
 
         // ---------- YARDIMCILAR ----------
 

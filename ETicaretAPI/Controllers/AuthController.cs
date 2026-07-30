@@ -679,6 +679,215 @@ namespace ETicaretAPI.Controllers
         }
 
 
+        // ⭐ YENİ — POST /api/auth/hesabimi-sil
+        //
+        // KVKK "unutulma hakkı" karşılığı. Ama kullanıcı satırı GERÇEKTEN
+        // SİLİNMİYOR — anonimleştiriliyor.
+        //
+        // Neden gerçekten silmiyoruz?
+        //   1. Review.UserId üzerindeki FK "Restrict" ayarlı — veritabanı
+        //      silmeyi zaten reddeder
+        //   2. Siparişler yetim kalır, ciro raporları bozulur
+        //   3. Sipariş bir muhasebe kaydıdır, silinmesi yasal sorun yaratır
+        //
+        // Çözüm: ticari kayıt kalır, kişisel veri gider.
+        //
+        // Neden POST, DELETE değil?
+        //   a) Şifre onayı gövdede taşınıyor; DELETE gövdesi HTTP'de
+        //      tanımsız ve bazı ara katmanlar sessizce atıyor
+        //   b) Yaptığımız iş kaynak silme değil, durum geçişi
+        //
+        // Rate limit: şifre deneme yanılmasını engellemek için.
+        [Microsoft.AspNetCore.Authorization.Authorize]
+        [EnableRateLimiting("giris")]
+        [HttpPost("hesabimi-sil")]
+        public async Task<IActionResult> HesabimiSil([FromBody] HesapSilDto dto)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var userId = GetUserId();
+
+            var kullanici = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
+
+            if (kullanici == null || !kullanici.IsActive)
+                return Unauthorized(new { mesaj = "Oturum geçersiz. Lütfen tekrar giriş yap." });
+
+            // ---------- 1) ŞİFRE ONAYI ----------
+            if (!BCrypt.Net.BCrypt.Verify(dto.Sifre, kullanici.PasswordHash))
+            {
+                return BadRequest(new { mesaj = "Şifren yanlış. Hesabın kapatılmadı." });
+            }
+
+            // ---------- 2) SÜPERADMİN KORUMASI ----------
+            //
+            // Süperadmin kendini kapatırsa sistemi yönetecek kimse kalmaz:
+            // rol atayamaz, admin başvurusu onaylayamaz, kimseyi
+            // yetkilendiremez. Kilidi içeride bırakıp kapıyı kapatmak gibi.
+            //
+            // Normal admin kendini kapatabilir — denetim kayıtlarındaki
+            // ActorName dondurulmuş olduğu için geçmiş işlemleri izlenebilir
+            // kalır ve başka adminler sistemi yönetmeye devam eder.
+            if (kullanici.Role == "superadmin")
+            {
+                return BadRequest(new
+                {
+                    mesaj = "Süperadmin hesabı bu ekrandan kapatılamaz. " +
+                            "Önce başka bir kullanıcıya süperadmin yetkisi verilmeli."
+                });
+            }
+
+            // ---------- 3) BİLGİLENDİRME İÇİN ESKİ BİLGİLERİ SAKLA ----------
+            //
+            // ⚠️ Maili ANONİMLEŞTİRMEDEN ÖNCE yakalamak zorundayız.
+            //    Sonra yakalamaya kalksak "silinmis_47@silinmis.local"
+            //    adresine mail göndermeye çalışırdık.
+            var eskiEmail = kullanici.Email;
+            var eskiAd = kullanici.FullName;
+
+            // ---------- 4) TRANSACTION ----------
+            //
+            // Neden şart? Altı ayrı yazma işlemi var. Üçüncüsünde uygulama
+            // çökse: adresler ve kartlar silinmiş, kullanıcı hâlâ aktif,
+            // oturumlar açık. Yarı silinmiş bir hesap — en kötü durum.
+            //
+            // Transaction "ya hepsi ya hiçbiri" garantisi veriyor.
+            using var transaction = await _context.Database.BeginTransactionAsync();
+
+            try
+            {
+                // ---------- 5) KİŞİSEL VERİLERİ SİL ----------
+                //
+                // ExecuteDeleteAsync: tek SQL cümlesiyle siler.
+                //   Klasik yol: SELECT ile hepsini belleğe çek → RemoveRange →
+                //               SaveChanges → EF her satır için ayrı DELETE
+                //   Bu yol:     DELETE FROM Addresses WHERE UserId = @id
+                //
+                // 50 adresi olan bir kullanıcıda 51 sorgu yerine 1 sorgu.
+                // Ayrıca change tracker'a hiç yüklenmiyor.
+                //
+                // Mevcut transaction'a otomatik dahil olur — rollback bunları
+                // da geri alır.
+                await _context.Addresses
+                    .Where(a => a.UserId == userId)
+                    .ExecuteDeleteAsync();
+
+                await _context.Cards
+                    .Where(c => c.UserId == userId)
+                    .ExecuteDeleteAsync();
+
+                await _context.CartItems
+                    .Where(c => c.UserId == userId)
+                    .ExecuteDeleteAsync();
+
+                await _context.Favorites
+                    .Where(f => f.UserId == userId)
+                    .ExecuteDeleteAsync();
+
+                // ---------- 6) OTURUMLARI KAPAT ----------
+                //
+                // Burada iptal etmek (RevokedAt) yerine SİLİYORUZ.
+                //
+                // Normalde iptal edilen token'ları saklıyoruz — hırsızlık
+                // tespiti için gerekli (iptal edilmiş token tekrar kullanılırsa
+                // alarm veriyoruz). Ama hesap kapatıldıysa o kullanıcı için
+                // hırsızlık tespitinin bir anlamı kalmıyor: token'ın sahibi
+                // ne yaparsa yapsın giriş yapamaz.
+                //
+                // Ayrıca token kayıtları cihaz bilgisi (CihazBilgisi) taşıyor —
+                // bu da kişisel veri. KVKK gereği gitmeli.
+                await _context.RefreshTokens
+                    .Where(t => t.UserId == userId)
+                    .ExecuteDeleteAsync();
+
+                // ---------- 7) KULLANICIYI ANONİMLEŞTİR ----------
+
+                kullanici.FullName = "Silinmiş Kullanıcı";
+
+                // E-posta benzersiz olmak ZORUNDA — bugün eklediğimiz
+                // IX_Users_Email indeksi var. Id'yi kullanmak benzersizliği
+                // garanti ediyor çünkü Id zaten birincil anahtar.
+                //
+                // ".local" alan adı RFC 6762'ye göre yalnızca yerel ağda
+                // kullanılır, internette çözümlenemez. Yani bu adrese
+                // yanlışlıkla mail gönderilse bile hiçbir yere ulaşmaz.
+                kullanici.Email = $"silinmis_{userId}@silinmis.local";
+
+                // Şifreyi rastgele bir değerle değiştiriyoruz.
+                //
+                // Neden boş bırakmıyoruz? BCrypt.Verify boş hash ile
+                // çağrılırsa exception atar. Rastgele bir GUID'in hash'i
+                // ise geçerli bir hash — sadece kimse o "şifreyi" bilmiyor.
+                // Kimse tahmin edemez çünkü hiçbir yerde saklanmıyor.
+                kullanici.PasswordHash =
+                    BCrypt.Net.BCrypt.HashPassword(Guid.NewGuid().ToString());
+
+                // Soft delete işareti — Login bu kontrole bakıp reddediyor.
+                kullanici.IsActive = false;
+
+                // Damgayı yenile → eldeki tüm access token'lar anında ölür.
+                // Adım 6'da refresh token'ları sildik, burada access'leri
+                // öldürüyoruz. İkisi birlikte tam çıkış demek.
+                kullanici.SecurityStamp = Guid.NewGuid().ToString();
+
+                // Bekleyen doğrulama/sıfırlama linklerini iptal et.
+                // Kalsalardı: kullanıcı eski bir "şifre sıfırlama" mailindeki
+                // linke tıklayıp kapatılmış hesabın şifresini belirleyebilirdi.
+                kullanici.EmailDogrulamaTokenHash = null;
+                kullanici.EmailDogrulamaTokenBitis = null;
+                kullanici.SifreSifirlamaTokenHash = null;
+                kullanici.SifreSifirlamaTokenBitis = null;
+
+                // Kilitleme sayaçlarını temizle — artık anlamsız.
+                kullanici.YanlisGirisSayisi = 0;
+                kullanici.KilitBitis = null;
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+
+                return StatusCode(500, new
+                {
+                    mesaj = "Hesap kapatılırken hata oldu, hiçbir değişiklik yapılmadı.",
+                    hata = ex.Message
+                });
+            }
+
+            // ---------- 8) VEDA MAİLİ ----------
+            //
+            // Transaction'ın DIŞINDA ve try/catch içinde:
+            // mail gönderilemezse hesap kapatma GEÇERLİ kalmalı.
+            // Mail bir bildirimdir, işlemin parçası değil.
+            try
+            {
+                var govde =
+                    $"<p>Merhaba {eskiAd},</p>" +
+                    "<p>Hesabın kapatıldı ve kişisel bilgilerin " +
+                    "(adresler, kartlar, sepet, favoriler) silindi.</p>" +
+                    "<p>Yasal saklama yükümlülüğü nedeniyle geçmiş sipariş " +
+                    "kayıtların muhasebe kaydı olarak saklanmaya devam eder, " +
+                    "ancak artık kimliğinle ilişkilendirilemez.</p>" +
+                    "<p>Bu işlemi sen yapmadıysan hemen bizimle iletişime geç.</p>";
+
+                await _email.GonderAsync(eskiEmail, "Hesabın Kapatıldı", govde);
+            }
+            catch
+            {
+                // Sessizce yut — kullanıcının işlemi başarılı oldu.
+            }
+
+            return Ok(new
+            {
+                mesaj = "Hesabın kapatıldı. Kişisel bilgilerin silindi, " +
+                        "geçmiş siparişlerin muhasebe kaydı olarak saklanıyor."
+            });
+        }
+
+
+
         // ---------- YARDIMCILAR ----------
 
         // Yeni refresh üretir, hash'ini DB'ye yazar, HAM hâlini döndürür (istemciye o gider).

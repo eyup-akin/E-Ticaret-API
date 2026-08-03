@@ -18,19 +18,85 @@ namespace ETicaretAPI.Controllers
         private readonly IConfiguration _config;
         private readonly KuponServisi _kuponServisi;     // ⭐
 
+        // ⭐ YENİ — e-posta bildirimleri için üç bağımlılık
+        //
+        // _email     : gönderme sözleşmesi. Arkada konsol mu SMTP mi
+        //              olduğunu BİLMİYORUZ ve bilmemeliyiz.
+        // _sablonlar : içerik üretici.
+        // _log       : GuvenliGonderAsync hatayı buraya yazacak.
+        //
+        // Neden logger'ı uzantı metoduna PARAMETRE olarak veriyoruz?
+        // Uzantı metotları static'tir, bağımlılık enjeksiyonu alamazlar.
+        // Çağıranın kendi logger'ını vermesi ayrıca faydalı: log kaydında
+        // "hangi controller" bilgisi otomatik görünüyor.
+        private readonly IEmailGonderici _email;
+        private readonly EmailSablonlari _sablonlar;
+        private readonly ILogger<OrdersController> _log;
+
         public OrdersController(
             AppDbContext context,
             IConfiguration config,
-            KuponServisi kuponServisi)                    // ⭐
+            KuponServisi kuponServisi,                    // ⭐
+            IEmailGonderici email,                        // ⭐ YENİ
+            EmailSablonlari sablonlar,                    // ⭐ YENİ
+            ILogger<OrdersController> log)                // ⭐ YENİ
         {
             _context = context;
             _config = config;
             _kuponServisi = kuponServisi;                 // ⭐
+            _email = email;
+            _sablonlar = sablonlar;
+            _log = log;
         }
 
         private int GetUserId()
         {
             return int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
+        }
+
+        // ⭐ YENİ — bildirim için müşterinin e-posta adresi.
+        //
+        // Sadece tek kolon çekiyoruz (Select ile). Tüm User satırını
+        // çekmenin anlamı yok — ad, şifre hash'i, güvenlik damgası
+        // hepsi ağdan boşuna geçerdi.
+        //
+        // ?? string.Empty : kullanıcı silinmişse boş dönüyor.
+        // GuvenliGonderAsync boş adresi zaten atlıyor, ek kontrol
+        // gerekmiyor.
+        private async Task<string> MusteriEmailiGetirAsync(int userId)
+        {
+            return await _context.Users
+                .Where(u => u.Id == userId)
+                .Select(u => u.Email)
+                .FirstOrDefaultAsync() ?? string.Empty;
+        }
+
+        // ⭐ YENİ — sipariş maili için ürün satırları.
+        //
+        // Neden OrderItem listesini doğrudan şablona vermiyoruz?
+        // OrderItem'da ürün ADI yok, sadece ProductId var. Şablonun
+        // veritabanına gitmesi ise katman ihlali olurdu: şablonun tek
+        // işi metin üretmek.
+        //
+        // ⚠️ ProductName'i Products tablosundan CANLI okuyoruz, oysa
+        // fiyat dondurulmuş (oi.UnitPrice). Tutarsız gibi duruyor ama
+        // değil: para dondurulur çünkü hukuki bir kayıttır. Ürün adı
+        // dondurulmaz çünkü OrderItem'da böyle bir alan yok ve müşteri
+        // için ürünün GÜNCEL adını görmek daha faydalı ("Akıllı Saat"
+        // yerine "Akıllı Saat Pro" yazsa bile aynı ürünü tanır).
+        //
+        // Not: ürün silinirse bu join satırı düşürür ve mailde o kalem
+        // görünmez. Aşama 0.1'de ürünlere pasife alma özelliği ekledik
+        // — artık silmek nadir bir işlem, bu risk kabul edilebilir.
+        private async Task<List<EmailSiparisKalemi>> EmailKalemleriGetirAsync(int orderId)
+        {
+            return await _context.OrderItems
+                .Where(oi => oi.OrderId == orderId)
+                .Join(_context.Products,
+                      oi => oi.ProductId,
+                      p => p.Id,
+                      (oi, p) => new EmailSiparisKalemi(p.Name, oi.Quantity, oi.UnitPrice))
+                .ToListAsync();
         }
 
 
@@ -553,6 +619,35 @@ namespace ETicaretAPI.Controllers
                 // 10) Her şey başarılı — transaction'ı onayla
                 await transaction.CommitAsync();
 
+                // ============================================================
+                // ⭐ YENİ — 11) SİPARİŞ ALINDI BİLDİRİMİ
+                //
+                // ⚠️ KONUMU KRİTİK: CommitAsync'ten SONRA.
+                //
+                // Öncesinde gönderseydik ve sonraki bir adım patlasaydı,
+                // transaction geri alınır ama MAİL GERİ ALINAMAZDI.
+                // Müşterinin elinde var olmayan bir siparişin onayı kalırdı.
+                //
+                // Kural: geri alınamaz yan etkiler, geri alınabilir olanların
+                // sonrasına konur.
+                //
+                // ⚠️ GuvenliGonderAsync kendi içinde try/catch yapıyor.
+                // Buradaki dış catch bloğu RollbackAsync çağırıyor — mail
+                // hatası oraya düşseydi, ZATEN COMMIT EDİLMİŞ bir
+                // transaction'ı geri almaya çalışırdık. O da ikinci bir
+                // istisna fırlatırdı ve asıl hata kaybolurdu.
+                //
+                // kullanici.Email'i kullanıyoruz: nesne zaten elimizde
+                // (adresi dondururken çekmiştik), ekstra sorgu yok.
+                var emailKalemleri = await EmailKalemleriGetirAsync(siparis.Id);
+
+                await _email.GuvenliGonderAsync(
+                    _log,
+                    kullanici.Email,
+                    _sablonlar.SiparisAlindi(siparis, emailKalemleri),
+                    "SiparisAlindi");
+                // ============================================================
+
                 return Ok(new
                 {
                     mesaj = "Sipariş oluşturuldu ve ödeme alındı biladerim!",
@@ -770,6 +865,20 @@ namespace ETicaretAPI.Controllers
 
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
+
+                // ⭐ YENİ — iptal bildirimi (transaction'dan SONRA).
+                //
+                // Müşteri iptali kendisi yaptı, "haberi var" diyebiliriz.
+                // Yine de gönderiyoruz çünkü mail bir KAYIT işlevi görüyor:
+                // iade tutarı, sipariş numarası ve tarih yazılı olarak
+                // elinde kalıyor. Bankaya itiraz gerekirse bu belge olur.
+                var aliciEmail = await MusteriEmailiGetirAsync(order.UserId);
+
+                await _email.GuvenliGonderAsync(
+                    _log,
+                    aliciEmail,
+                    _sablonlar.SiparisIptalEdildi(order, order.CancelReason),
+                    "SiparisIptal:Musteri");
 
                 return Ok(new { mesaj = "Siparişin iptal edildi ve ödemen iade edildi.", durum = "iptal" });
             }
@@ -1383,6 +1492,42 @@ namespace ETicaretAPI.Controllers
             order.Status = yeniDurum;
             await _context.SaveChangesAsync();
 
+            // ============================================================
+            // ⭐ YENİ — DURUM BİLDİRİMİ
+            //
+            // Burada açık bir transaction yok — SaveChangesAsync kendi
+            // içinde örtük bir transaction kullanıyor ve dönüş yaptığında
+            // veri zaten kalıcı. Yine de maili SONRASINA koyuyoruz;
+            // aynı ilke geçerli.
+            //
+            // Neden tek if içinde iki durum? İkisi de "müşteriye haber
+            // ver" işi ve ortak veriye (alıcı e-postası) ihtiyaç duyuyor.
+            // Ayrı ayrı yazsaydık e-posta sorgusu iki yerde tekrarlanırdı.
+            //
+            // "hazirlaniyor" için bildirim YOK: sipariş zaten o durumda
+            // oluşuyor ve "Sipariş Alındı" maili gönderilmiş oluyor.
+            // İkinci bir mail gürültü olurdu.
+            if (yeniDurum == "kargoda" || yeniDurum == "teslim_edildi")
+            {
+                var aliciEmail = await MusteriEmailiGetirAsync(order.UserId);
+
+                // Şablon seçimi burada; gönderim tek satır.
+                // İki ayrı GuvenliGonderAsync çağrısı yazmak yerine
+                // sadece İÇERİĞİ dallandırıyoruz — değişen tek şey o.
+                var icerik = yeniDurum == "kargoda"
+                    ? _sablonlar.KargoyaVerildi(order)
+                    : _sablonlar.TeslimEdildi(order);
+
+                // olayAdi'na durumu da ekliyoruz: log'da hangi bildirimin
+                // başarısız olduğu tek bakışta görünsün.
+                await _email.GuvenliGonderAsync(
+                    _log,
+                    aliciEmail,
+                    icerik,
+                    "SiparisDurumu:" + yeniDurum);
+            }
+            // ============================================================
+
             // Kargo bilgilerini cevapta geri döndürüyoruz ki panel
             // sayfayı baştan yüklemeden ekranı güncelleyebilsin.
             return Ok(new
@@ -1463,6 +1608,24 @@ namespace ETicaretAPI.Controllers
 
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
+
+                // ⭐ YENİ — iptal bildirimi (transaction'dan SONRA).
+                //
+                // Bu, dört bildirim içinde en ÖNEMLİSİ: müşterinin
+                // haberi olmadan siparişi iptal edildi. Uygulamayı
+                // açmazsa günlerce beklemeye devam eder.
+                //
+                // Şablonda iptal sebebi de gidiyor — admin'in yazdığı
+                // metin doğrudan müşteriye ulaşıyor. Bu yüzden şablonda
+                // Kacir() ile HTML kaçışı yapıyoruz; admin de sonuçta
+                // serbest metin giriyor.
+                var aliciEmail = await MusteriEmailiGetirAsync(order.UserId);
+
+                await _email.GuvenliGonderAsync(
+                    _log,
+                    aliciEmail,
+                    _sablonlar.SiparisIptalEdildi(order, order.CancelReason),
+                    "SiparisIptal:Admin");
 
                 return Ok(new
                 {

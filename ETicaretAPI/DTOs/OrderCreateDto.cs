@@ -16,5 +16,20 @@ namespace ETicaretAPI.DTOs
         // ⚠️ Sadece KOD alıyoruz. İndirim tutarını ön yüzden ALMIYORUZ,
         // sunucu yeniden hesaplıyor.
         public string? CouponCode { get; set; }
+
+        // ⭐ YENİ — sipariş notu, isteğe bağlı.
+        //
+        // Neden [Required] yok: notsuz sipariş tamamen normal.
+        //
+        // Neden [MaxLength] VAR: sınırsız metin kabul etmek üç riski
+        // birden taşır — veritabanını şişirmek, kargo etiketini bozmak
+        // ve admin ekranını okunmaz hale getirmek. 500 karakter
+        // "kapıya bırakın, zili çalmayın" için fazlasıyla yeterli.
+        //
+        // Bu sınır AppDbContext'teki HasMaxLength(500) ile aynı sayı
+        // olmalı. Farklı olsalardı ya DTO gereksiz yere reddederdi ya
+        // da veritabanı istisna fırlatırdı — ikisi de kötü.
+        [MaxLength(500, ErrorMessage = "Sipariş notu en fazla 500 karakter olabilir!")]
+        public string? CustomerNote { get; set; }
     }
 }

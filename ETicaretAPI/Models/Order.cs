@@ -56,5 +56,66 @@
         // İptal bilgileri — nullable, iptal edilmemiş siparişlerde boş
         public string? CancelReason { get; set; }
         public DateTime? CancelledAt { get; set; }
+
+        // ⭐ YENİ — KARGO TAKİP BİLGİLERİ
+        //
+        // Hepsi nullable (?) çünkü sipariş oluşturulduğu anda bunların
+        // hiçbiri bilinmiyor. Sipariş hayat döngüsünde ilerledikçe
+        // doluyorlar:
+        //
+        //   hazirlaniyor    → hepsi null
+        //   kargoda         → ShippingCompany, TrackingNumber, ShippedAt dolu
+        //   teslim_edildi   → DeliveredAt de dolu
+        //
+        // Bu, CancelReason/CancelledAt ikilisiyle birebir aynı desen:
+        // "henüz olmamış bir olayın bilgisi null'dır."
+        //
+        // ⚠️ Neden bunlar DONDURULMUŞ alan sayılmıyor?
+        // ShippingFullName gibi alanlar başka bir tablodan (Addresses)
+        // kopyalanıyor — kaynak değişse bile sipariş eski hali hatırlasın
+        // diye. Bunlar ise başka hiçbir yerde yaşamıyor, doğrudan buraya
+        // yazılıyor. Kopya değil, asıl veri.
+
+        // Kargo firmasının adı. Örn: "Yurtiçi Kargo"
+        //
+        // Neden ayrı bir ShippingCompanies TABLOSU değil de düz metin?
+        // Firma listesi 4-5 elemanlı, nadiren değişiyor ve firmanın
+        // adından başka hiçbir özelliğini saklamıyoruz. Tablo açmak
+        // her sipariş sorgusuna bir JOIN eklerdi — bedeli faydasından
+        // fazla. Liste appsettings'ten okunacak (1.2'de).
+        //
+        // Ayrıca burada saklanan metin bir DONDURULMUŞ değer gibi
+        // davranıyor: firma listeden çıksa bile eski sipariş hangi
+        // firmayla gittiğini hatırlıyor.
+        public string? ShippingCompany { get; set; }
+
+        // Kargo firmasının verdiği takip numarası.
+        //
+        // Neden string, neden long/int değil?
+        // Numaralar firma bazında farklı biçimde: bazıları harf içeriyor
+        // ("YK1234567890"), bazıları başında sıfırla başlıyor ("0012345")
+        // ve sayıya çevirirsek o sıfırlar kaybolur. Üzerinde toplama
+        // çıkarma yapmadığımız her "numara" aslında bir METİNDİR.
+        public string? TrackingNumber { get; set; }
+
+        // Kargoya verildiği an (UTC).
+        // Durum "kargoda" yapıldığında sunucu otomatik yazar — admin
+        // elle girmez, çünkü "ne zaman kargoya verdim" sorusunun cevabı
+        // tıklanan andır.
+        public DateTime? ShippedAt { get; set; }
+
+        // Teslim edildiği an (UTC).
+        public DateTime? DeliveredAt { get; set; }
+
+        // ⭐ YENİ — MÜŞTERİ NOTU
+        //
+        // "Kapıya bırakın", "zili çalmayın bebek uyuyor", "iş yerine
+        // öğleden sonra getirin" gibi.
+        //
+        // Sipariş anında müşteri yazar, bir daha DEĞİŞMEZ. Adres gibi
+        // dondurulmuş sayılır: kargo hazırlanırken okunacak talimat,
+        // sonradan değiştirilebilir olsa kargo çıktıktan sonra
+        // değiştirilip "ben böyle yazmıştım" tartışması çıkardı.
+        public string? CustomerNote { get; set; }
     }
 }

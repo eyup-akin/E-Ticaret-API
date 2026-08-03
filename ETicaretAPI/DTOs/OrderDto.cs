@@ -26,6 +26,25 @@
         public string? CancelReason { get; set; }      // iptal sebebi (null = iptal değil)
         public DateTime? CancelledAt { get; set; }     // iptal tarihi
 
+        // ⭐ YENİ — KARGO TAKİP BİLGİLERİ
+        //
+        // Hepsi nullable ve bu doğrudan JSON'a yansıyor: sipariş henüz
+        // kargoya verilmemişse mobil taraf { "trackingNumber": null }
+        // görüyor ve "kargo kutusunu hiç çizme" kararını buradan veriyor.
+        //
+        // Alternatif, alan yoksa JSON'dan tamamen çıkarmaktı. Bunu
+        // yapmadık: null gelmesi "biliyorum ve boş" demek, alanın hiç
+        // olmaması "bilmiyorum" demek. İstemci ikisini ayırt edebilmeli.
+        public string? ShippingCompany { get; set; }
+        public string? TrackingNumber { get; set; }
+        public DateTime? ShippedAt { get; set; }
+        public DateTime? DeliveredAt { get; set; }
+
+        // ⭐ YENİ — müşterinin sipariş notu.
+        // Hem müşteri kendi siparişinde görsün (ne yazdığını hatırlasın)
+        // hem admin kargo hazırlarken okusun.
+        public string? CustomerNote { get; set; }
+
         public List<OrderItemDto> Items { get; set; } = new();
 
        

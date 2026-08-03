@@ -241,6 +241,46 @@ namespace ETicaretAPI.Data
                 .Property(o => o.DiscountAmount)
                 .HasPrecision(18, 2);
 
+
+            // ⭐ YENİ — KARGO VE NOT ALANLARININ UZUNLUK SINIRLARI
+            //
+            // NEDEN GEREKLİ?
+            // Yapılandırma vermezsek EF Core, string alanları SQL Server'da
+            // NVARCHAR(MAX) olarak oluşturur. Bu üç sorun doğurur:
+            //
+            //   1) NVARCHAR(MAX) satır dışında ("off-row") saklanır —
+            //      okuma yavaşlar.
+            //   2) MAX kolonlara indeks kurulamaz. Şimdi gerekmiyor ama
+            //      "takip numarasına göre sipariş bul" istenirse elimiz
+            //      bağlı kalır.
+            //   3) Sınır yoksa bir hata (ya da kötü niyet) 2 GB'lık bir
+            //      metni veritabanına yazabilir.
+            //
+            // Sınırı VERİTABANI seviyesinde koymak, DTO'daki [MaxLength]
+            // doğrulamasının YEDEĞİdir. DTO doğrulaması atlanabilir
+            // (yeni bir endpoint yazarken unutulur, arka plan işi
+            // doğrudan modele yazar); veritabanı sınırı atlanamaz.
+            // Aynı doğrulamanın iki katmanda olması tekrar değil,
+            // savunma derinliğidir.
+
+            // 50: en uzun firma adı bile 20 karakteri geçmiyor,
+            // rahat bir tavan bırakıyoruz.
+            modelBuilder.Entity<Order>()
+                .Property(o => o.ShippingCompany)
+                .HasMaxLength(50);
+
+            // 50: takip numaraları tipik olarak 10-20 karakter.
+            modelBuilder.Entity<Order>()
+                .Property(o => o.TrackingNumber)
+                .HasMaxLength(50);
+
+            // 500: "kapıya bırakın" tarzı notlar için fazlasıyla yeterli.
+            // Sınırsız bırakmak müşterinin roman yazmasına ve kargo
+            // etiketine sığmayan bir metne yol açardı.
+            modelBuilder.Entity<Order>()
+                .Property(o => o.CustomerNote)
+                .HasMaxLength(500);
+
         }
     }
 }

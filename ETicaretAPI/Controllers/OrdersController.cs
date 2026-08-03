@@ -470,7 +470,27 @@ namespace ETicaretAPI.Controllers
                     // ⭐ KUPON — dondurulmuş
                     SubTotal = araToplam,
                     CouponCode = kullanilanKod,
-                    DiscountAmount = indirimTutari
+                    DiscountAmount = indirimTutari,
+
+                    // ⭐ YENİ — MÜŞTERİ NOTU
+                    //
+                    // Boşsa null yazıyoruz, boş string değil.
+                    //
+                    // Neden fark eder? Veritabanında "" ve NULL farklı
+                    // şeylerdir ve sorgularda ayrı davranırlar:
+                    //   WHERE CustomerNote IS NOT NULL
+                    // sorgusu boş string'i "not var" sayardı. İleride
+                    // "notu olan siparişler" filtresi yazarsak boş
+                    // notlar listeye dolardı.
+                    //
+                    // Kural: "değer yok" durumunu TEK bir şekilde temsil et.
+                    // Bu projede o temsil NULL.
+                    //
+                    // Trim: baştaki/sondaki boşluklar mobil klavyeden çok
+                    // sık geliyor ve kargo etiketinde hizalamayı bozuyor.
+                    CustomerNote = string.IsNullOrWhiteSpace(dto.CustomerNote)
+                        ? null
+                        : dto.CustomerNote.Trim()
 
                 };
 
@@ -589,6 +609,13 @@ namespace ETicaretAPI.Controllers
                     CancelReason = o.CancelReason,
                     CancelledAt = o.CancelledAt,
 
+                    // ⭐ YENİ — kargo bilgileri
+                    ShippingCompany = o.ShippingCompany,
+                    TrackingNumber = o.TrackingNumber,
+                    ShippedAt = o.ShippedAt,
+                    DeliveredAt = o.DeliveredAt,
+                    CustomerNote = o.CustomerNote,
+
                     Items = _context.OrderItems
                         .Where(oi => oi.OrderId == o.Id)
                         .Join(_context.Products,
@@ -661,6 +688,13 @@ namespace ETicaretAPI.Controllers
                 CreatedAt = order.CreatedAt,
                 CancelReason = order.CancelReason,
                 CancelledAt = order.CancelledAt,
+
+                // ⭐ YENİ — kargo bilgileri
+                ShippingCompany = order.ShippingCompany,
+                TrackingNumber = order.TrackingNumber,
+                ShippedAt = order.ShippedAt,
+                DeliveredAt = order.DeliveredAt,
+                CustomerNote = order.CustomerNote,
 
                 Items = items
             };
@@ -756,6 +790,51 @@ namespace ETicaretAPI.Controllers
         // ==========================================================
         //  ADMIN BÖLÜMÜ
         // ==========================================================
+
+        // ⭐ YENİ — KARGO FİRMALARI
+        //
+        // Listeyi appsettings'ten okur. Koda gömülmez ki firma eklemek
+        // için yeni sürüm çıkmak gerekmesin.
+        //
+        // Get<string[]>() JSON dizisini doğrudan C# dizisine çeviriyor.
+        // Bunun için System.Text.Json'a elle dokunmuyoruz — yapılandırma
+        // altyapısı bağlamayı (binding) kendi yapıyor.
+        //
+        // ?? Array.Empty<string>() : ayar hiç tanımlanmamışsa null döner.
+        // Boş diziye çevirmek, çağıran her yerde null kontrolü yapma
+        // zorunluluğunu ortadan kaldırıyor.
+        //
+        // Neden static DEĞİL, neden her çağrıda okuyoruz?
+        //   _config bir örnek (instance) alanı, static metottan
+        //   erişilemez. Ayrıca .NET yapılandırmayı zaten bellekte
+        //   tutuyor — burada disk okuması yok, sadece sözlükten değer
+        //   alma var. Önbelleğe almanın kazancı yok.
+        private string[] KargoFirmalariniGetir()
+        {
+            return _config.GetSection("Kargo:Firmalar").Get<string[]>()
+                   ?? Array.Empty<string>();
+        }
+
+        // 🔴 GET /api/admin/kargo-firmalari — panelin açılır menüsü için
+        //
+        // Neden ayrı bir endpoint, liste panelde sabit yazılamaz mı?
+        //   Yazılabilirdi ama o zaman aynı liste İKİ yerde dururdu:
+        //   backend'in doğrulama listesi ve panelin menü listesi.
+        //   İkisi ayrışınca admin menüden bir firma seçer, sunucu
+        //   "böyle bir firma yok" der. Tek kaynak ilkesi:
+        //   liste sunucuda yaşar, panel ondan sorar.
+        //
+        // Neden "async Task<IActionResult>" değil de düz "IActionResult"?
+        //   İçeride beklenecek (await) hiçbir şey yok — ne veritabanı ne
+        //   ağ. Gereksiz yere async yazmak derleyici uyarısı üretir ve
+        //   her çağrıda ufak bir durum makinesi maliyeti ekler.
+        [Authorize(Roles = "admin")]
+        [HttpGet("/api/admin/kargo-firmalari")]
+        public IActionResult GetKargoFirmalari()
+        {
+            return Ok(KargoFirmalariniGetir());
+        }
+
 
         // ⭐ DURUM MAKİNESİ
         // Bir sipariş hangi durumdan hangi duruma geçebilir?
@@ -977,6 +1056,27 @@ namespace ETicaretAPI.Controllers
                 iptalSebebi = order.CancelReason,
                 iptalTarihi = order.CancelledAt,
 
+                // ⭐ YENİ — kargo bilgileri.
+                //
+                // Burada Türkçe anahtar kullanıyoruz çünkü bu endpoint
+                // OrderDto değil, anonim nesne döndürüyor ve panelin geri
+                // kalanı (siparisNo, kartSon4, iptalSebebi) Türkçe.
+                // Modeller İngilizce, bu özel admin sözleşmesi Türkçe —
+                // dosya içinde tutarlı olmak, projeye global tek bir kural
+                // dayatmaktan daha önemli.
+                kargoFirmasi = order.ShippingCompany,
+                takipNo = order.TrackingNumber,
+                kargoyaVerilmeTarihi = order.ShippedAt,
+                teslimTarihi = order.DeliveredAt,
+
+                // Kargo hazırlayan bunu MUTLAKA görmeli — panelde
+                // belirgin gösterilecek (1.3'te).
+                musteriNotu = order.CustomerNote,
+
+                // Panelin "Kargoya Ver" modalındaki menüyü doldurması için.
+                // Ayrı bir istek atmasına gerek kalmıyor.
+                kargoFirmalari = KargoFirmalariniGetir(),
+
                 izinliGecisler = izinliGecisler,
                 iptalEdilebilir = iptalEdilebilir,
 
@@ -1096,10 +1196,19 @@ namespace ETicaretAPI.Controllers
 
 
         // 🔴 PUT /api/admin/orders/5/status — kargo durumunu İLERLET
+        //
+        // ⭐ v6: Artık sadece durum değiştirmiyor. "kargoda" geçişinde
+        //        firma + takip numarası da alıyor ve tarihleri yazıyor.
         [Authorize(Roles = "admin")]
         [HttpPut("/api/admin/orders/{id}/status")]
         public async Task<IActionResult> UpdateOrderStatus(int id, [FromBody] StatusUpdateDto dto)
         {
+            // DTO'daki [MaxLength] gibi öznitelikler burada devreye girer.
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
             var yeniDurum = dto.Status.Trim().ToLowerInvariant();
 
             var order = await _context.Orders.FindAsync(id);
@@ -1132,11 +1241,113 @@ namespace ETicaretAPI.Controllers
                 });
             }
 
+            // ============================================================
+            // ⭐ YENİ — KARGOYA VERME KURALLARI
+            //
+            // Neden bu kontroller DTO özniteliğiyle yapılamadı?
+            //   [Required] koşulsuz çalışır: "teslim_edildi" geçişinde de
+            //   takip numarası isterdi. Kural alana değil DURUMA bağlı,
+            //   dolayısıyla yeri iş mantığı.
+            //
+            // Neden geçiş kontrolünden SONRA?
+            //   Sıra önemli. Önce "bu geçiş yapılabilir mi" diye soruyoruz.
+            //   Ters sırada olsaydı, teslim edilmiş bir siparişi tekrar
+            //   kargoya vermeye çalışan admin önce "takip numarası gir"
+            //   uyarısı alır, numarayı girer, sonra "bu geçiş yapılamaz"
+            //   duvarına toslardı. Kullanıcıyı boşuna uğraştırmak.
+            // ============================================================
+            if (yeniDurum == "kargoda")
+            {
+                // Trim: admin yapıştırırken başa/sona boşluk gelmesi çok yaygın.
+                // Boşluklu takip numarası kargo firmasının sitesinde bulunamaz.
+                var firma = dto.ShippingCompany?.Trim();
+                var takipNo = dto.TrackingNumber?.Trim();
+
+                if (string.IsNullOrWhiteSpace(firma))
+                {
+                    return BadRequest(new
+                    {
+                        mesaj = "Kargoya verirken kargo firmasını seçmelisin."
+                    });
+                }
+
+                if (string.IsNullOrWhiteSpace(takipNo))
+                {
+                    return BadRequest(new
+                    {
+                        mesaj = "Kargoya verirken takip numarası girmelisin."
+                    });
+                }
+
+                // ---- BEYAZ LİSTE KONTROLÜ ----
+                //
+                // Panel açılır menü gösteriyor ama menüye güvenmiyoruz:
+                // istek Postman'den de gelebilir. "Ön yüz zaten kısıtlıyor"
+                // asla bir doğrulama gerekçesi değildir — ön yüz saldırganın
+                // kontrolündedir.
+                //
+                // Neden serbest metin kabul etmiyoruz? Yazım hataları
+                // ("Yurtici", "yurtiçi kargo", "YK") veriyi çöpe çevirir.
+                // İleride "hangi firmayla kaç gönderi yaptık" raporu
+                // istediğimizde aynı firma 5 farklı isimle görünürdü.
+                var izinliFirmalar = KargoFirmalariniGetir();
+
+                // Length > 0 koşulu bilinçli: yapılandırma hiç tanımlanmamışsa
+                // doğrulamayı ATLIYORUZ.
+                //
+                // Alternatif "liste boşsa hiçbir şeyi kabul etme" olurdu ama
+                // o zaman appsettings'teki tek bir yazım hatası TÜM kargo
+                // işlemlerini durdururdu. Yanlış yapılandırmanın bedeli
+                // "biraz gevşek doğrulama" olsun, "mağaza kargo veremiyor"
+                // olmasın.
+                if (izinliFirmalar.Length > 0 &&
+                    !izinliFirmalar.Contains(firma, StringComparer.OrdinalIgnoreCase))
+                {
+                    return BadRequest(new
+                    {
+                        mesaj = $"'{firma}' tanımlı bir kargo firması değil. " +
+                                $"Seçilebilecekler: {string.Join(", ", izinliFirmalar)}"
+                    });
+                }
+
+                order.ShippingCompany = firma;
+                order.TrackingNumber = takipNo;
+
+                // ⭐ Tarihi SUNUCU yazıyor, admin girmiyor.
+                //
+                // "Ne zaman kargoya verdim" sorusunun cevabı, butona
+                // basılan andır. Admin'e tarih girdirseydik:
+                //   • yanlış tarih girilebilirdi (kasten veya sehven)
+                //   • saat dilimi karmaşası çıkardı
+                //   • bir alan daha doldurmak zorunda kalırdı
+                //
+                // UtcNow: projedeki tüm tarihler UTC. Yerel saat kullanmak
+                // yaz saati geçişlerinde sipariş sıralamasını bozardı —
+                // bu dersi zaten bir kere yaşadık.
+                order.ShippedAt = DateTime.UtcNow;
+            }
+
+            if (yeniDurum == "teslim_edildi")
+            {
+                order.DeliveredAt = DateTime.UtcNow;
+            }
+
             order.Status = yeniDurum;
             await _context.SaveChangesAsync();
 
-            return Ok(new { mesaj = "Sipariş durumu güncellendi biladerim!", durum = yeniDurum });
+            // Kargo bilgilerini cevapta geri döndürüyoruz ki panel
+            // sayfayı baştan yüklemeden ekranı güncelleyebilsin.
+            return Ok(new
+            {
+                mesaj = "Sipariş durumu güncellendi biladerim!",
+                durum = yeniDurum,
+                kargoFirmasi = order.ShippingCompany,
+                takipNo = order.TrackingNumber,
+                kargoyaVerilmeTarihi = order.ShippedAt,
+                teslimTarihi = order.DeliveredAt
+            });
         }
+
 
         // 🔴 PUT /api/admin/orders/5/cancel — siparişi iptal et (sebep zorunlu)
         // Ayrı bir endpoint, çünkü iptal sadece bir "durum değişikliği" değil:

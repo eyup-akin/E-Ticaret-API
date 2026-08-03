@@ -6,6 +6,7 @@ using Hangfire;
 using Microsoft.AspNetCore.Mvc;          // ⭐ YENİ — BadRequestObjectResult için
 using Microsoft.EntityFrameworkCore;
 
+
 var builder = WebApplication.CreateBuilder(args);
 
 // EF Core'u SQL Server'a bağla
@@ -175,6 +176,52 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0
             }));
 
+
+
+    // ⭐ YENİ — "kupon" politikası: kupon kodu doğrulama ucu için.
+    //
+    // NEDEN GEREKLİ?
+    // Kupon kodları kısa ve tahmin edilebilir (YAZ25, INDIRIM10...).
+    // Sınırsız deneme hakkı olan biri sözlük saldırısıyla geçerli kod
+    // bulabilir. "Tahmin edilebilir kısa kod" içeren HER uç, giriş
+    // ekranı kadar brute-force'a açıktır.
+    //
+    // NEDEN "giris" POLİTİKASINI KULLANMADIK?
+    //
+    // 1) Bölümleme anahtarı farklı olmalı.
+    //    Bu uç [Authorize] ile korunuyor — çağıranın KİM olduğunu
+    //    biliyoruz. IP'ye göre saymak iki yönden yanlış olurdu:
+    //      • Aynı NAT/kurumsal ağdan çıkan onlarca masum kullanıcı tek
+    //        IP görünür, biri limiti doldurunca hepsi cezalanır.
+    //      • Saldırgan VPN ile IP değiştirip sayacı sıfırlar.
+    //    Kullanıcı id'sine göre bölünce limiti aşmanın tek yolu YENİ
+    //    HESAP açmak; o da e-posta doğrulama ve kayıt limitine çarpar.
+    //
+    //    Kimlik yoksa IP'ye düşüyoruz — ama pratikte bu dal hiç
+    //    çalışmamalı ([Authorize] zaten kimliksizi içeri almıyor).
+    //    Yine de savunma amaçlı bırakıyoruz: politika ileride başka bir
+    //    uçta kullanılırsa partitionKey'in null olması tüm kimliksiz
+    //    istekleri TEK sayaca toplardı — istemediğimiz şey bu.
+    //
+    // 2) Sayı farklı olmalı.
+    //    5/dakika kupon için çok dar. Mobil uygulama sepet her
+    //    değiştiğinde kuponu yeniden doğruluyor (indirim tutarı
+    //    bayatlamasın diye). Debounce koyduk ama yine de normal bir
+    //    alışverişte dakikada birkaç istek olabiliyor.
+    //    20/dakika: gerçek kullanıcı için asla dolmaz, saldırganı ise
+    //    saatte 1200 denemeye hapseder.
+    options.AddPolicy("kupon", httpContext =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.User.FindFirst(
+                              System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                          ?? httpContext.Connection.RemoteIpAddress?.ToString()
+                          ?? "bilinmeyen",
+            factory: _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 20,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
 
 
     // Limit aşılınca ne dönsün? Kendi { mesaj } formatımıza uyalım

@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;   // ⭐ YENİ — [EnableRateLimiting] için
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 using ETicaretAPI.Data;
@@ -34,6 +35,14 @@ namespace ETicaretAPI.Controllers
         //
         // Neden ayrı? Müşteri kuponu yazınca anında görmek ister ama
         // henüz sipariş vermemiştir. Bu bir ÖNİZLEME.
+        // ⭐ YENİ — brute-force koruması.
+        //
+        // Özniteliği CONTROLLER'a değil METODA koyduk. Şu an controller'da
+        // tek metot var, ikisi de aynı sonucu verirdi. Ama ileride buraya
+        // "kuponlarım" gibi listeleme uçları eklenirse onların bu limite
+        // takılması yanlış olur — sınır, korunması gereken İŞE ait,
+        // dosyaya değil.
+        [EnableRateLimiting("kupon")]
         [HttpPost("dogrula")]
         public async Task<IActionResult> Dogrula([FromBody] CouponValidateDto dto)
         {

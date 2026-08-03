@@ -242,13 +242,38 @@ namespace ETicaretAPI.Controllers
         //  ÜRÜN ENDPOINT'LERİ
         // ==========================================================
 
-        // 🟢 GET /api/products?categoryId=2&search=nike
+        // 🟢 GET /api/products?categoryId=2&search=nike&aktif=false
         [HttpGet]
         public async Task<IActionResult> GetProducts(
             [FromQuery] int? categoryId,
-            [FromQuery] string? search)
+            [FromQuery] string? search,
+            [FromQuery] bool? aktif)          // ⭐ YENİ — sadece admin için anlamlı
         {
+            // Rolü bir kez okuyup değişkene alıyoruz. Aşağıda iki ayrı yerde
+            // lazım olacak; her seferinde token'daki claim listesini taramanın
+            // anlamı yok.
+            var adminMi = User.IsInRole("admin");
+
             var query = _context.Products.AsQueryable();
+
+            // ⭐ YENİ — GÖRÜNÜRLÜK KİLİDİ
+            //
+            // Müşteri ve misafir SADECE satıştaki ürünleri görür.
+            //
+            // Dikkat: "aktif" parametresini bilerek sadece admin dalında
+            // okuyoruz. Müşteri ?aktif=false yazarak pasif ürünleri
+            // listeletemez — o parametre onun dalında hiç değerlendirilmiyor.
+            // İstekten gelen hiçbir değer bu sınırı gevşetemez.
+            if (!adminMi)
+            {
+                query = query.Where(p => p.IsActive);
+            }
+            else if (aktif.HasValue)
+            {
+                // Admin panelinde "Sadece pasifler" / "Sadece aktifler"
+                // sekmesi için. Parametre gelmezse admin HEPSİNİ görür.
+                query = query.Where(p => p.IsActive == aktif.Value);
+            }
 
             if (categoryId.HasValue)
             {
@@ -269,13 +294,14 @@ namespace ETicaretAPI.Controllers
                     Stock = p.Stock,
                     CategoryId = p.CategoryId,
                     Barcode = p.Barcode,
-                    Cost = p.Cost
+                    Cost = p.Cost,
+                    IsActive = p.IsActive       // ⭐ YENİ
                 })
                 .ToListAsync();
 
             // Maliyet hassas bilgi: admin değilse hepsini null'a çek.
             // Böylece müşteriye/misafire maliyet GİTMEZ.
-            if (!User.IsInRole("admin"))
+            if (!adminMi)                        // ⭐ değişti: artık değişkeni kullanıyor
             {
                 foreach (var u in products)
                 {
@@ -289,6 +315,7 @@ namespace ETicaretAPI.Controllers
             return Ok(products);
         }
 
+
         // 🟢 GET /api/products/5
         [HttpGet("{id}")]
         public async Task<IActionResult> GetProduct(int id)
@@ -296,6 +323,25 @@ namespace ETicaretAPI.Controllers
             var product = await _context.Products.FindAsync(id);
 
             if (product == null)
+            {
+                return NotFound(new { mesaj = "Ürün bulunamadı biladerim!" });
+            }
+
+            var adminMi = User.IsInRole("admin");
+
+            // ⭐ YENİ — pasif ürün müşteriye "hiç yokmuş gibi" görünür.
+            //
+            // Neden yukarıdakiyle AYNI mesaj ve AYNI 404:
+            // "Bu ürün var ama satışta değil" demek, listede görünmeyen bir
+            // kaydın varlığını sızdırır. Projedeki kural: yetkisiz veya
+            // görünmez erişimde 404 > 403. Aktif oturumlarda da bunu
+            // uygulamıştık.
+            //
+            // Kabul ettiğimiz yan etki: eski bir bağlantıya veya paylaşılan
+            // linke tıklayan müşteri "bulunamadı" görür. Alternatifi,
+            // satın alınamayacak bir ürünü satın alınabilir göstermek —
+            // o daha kötü bir deneyim.
+            if (!product.IsActive && !adminMi)
             {
                 return NotFound(new { mesaj = "Ürün bulunamadı biladerim!" });
             }
@@ -308,17 +354,18 @@ namespace ETicaretAPI.Controllers
                 Stock = product.Stock,
                 CategoryId = product.CategoryId,
                 Barcode = product.Barcode,
+                IsActive = product.IsActive,                  // ⭐ YENİ
                 // Maliyet sadece admin isteğinde dolsun, değilse null kalsın
-                Cost = User.IsInRole("admin") ? product.Cost : null
+                Cost = adminMi ? product.Cost : null
             };
 
             await ResimleriDoldur(new List<ProductDto> { dto });
             await PuanlariDoldur(new List<ProductDto> { dto });
             await FavorileriDoldur(new List<ProductDto> { dto });
 
-
             return Ok(dto);
         }
+
 
         // 🔴 POST /api/products
         [Authorize(Roles = "admin")]
@@ -342,7 +389,8 @@ namespace ETicaretAPI.Controllers
                 Price = dto.Price,
                 Cost = dto.Cost,
                 Stock = dto.Stock,
-                CategoryId = dto.CategoryId
+                CategoryId = dto.CategoryId,
+                IsActive = dto.IsActive      // ⭐ YENİ — DTO varsayılanı true
             };
 
             _context.Products.Add(product);
@@ -380,11 +428,52 @@ namespace ETicaretAPI.Controllers
             product.Cost = dto.Cost;
             product.Stock = dto.Stock;
             product.CategoryId = dto.CategoryId;
+            product.IsActive = dto.IsActive;      // ⭐ YENİ
 
             await _context.SaveChangesAsync();
 
             return Ok(new { mesaj = "Ürün güncellendi biladerim!", id = product.Id });
         }
+
+
+        // 🔴 PUT /api/products/5/durum — satışa aç / satıştan kaldır
+        //
+        // Neden ayrı endpoint? PUT /api/products/5 zaten aktifliği yazıyor,
+        // ama o metot TÜM ürün formunu bekliyor: ad, barkod, fiyat, maliyet,
+        // stok, kategori. Admin panelindeki ÜRÜN LİSTESİNDE bu bilgilerin
+        // hepsi elimizde yok (maliyet listede gösterilmiyor mesela).
+        // Eksik gönderirsek o alanları sıfırla ezeriz.
+        //
+        // Kural: tek alanlık işlem = tek alanlık endpoint.
+        //
+        // StatusToggleDto'yu yeniden kullanıyoruz — kullanıcı ve kupon
+        // durumları da aynı DTO'yu kullanıyor. Aynı şekilli üçüncü bir DTO
+        // yazmak kopya kod olurdu.
+        [Authorize(Roles = "admin")]
+        [HttpPut("{id}/durum")]
+        public async Task<IActionResult> ToggleDurum(int id, [FromBody] StatusToggleDto dto)
+        {
+            var urun = await _context.Products.FindAsync(id);
+
+            if (urun == null)
+            {
+                return NotFound(new { mesaj = "Ürün bulunamadı!" });
+            }
+
+            urun.IsActive = dto.IsActive;
+            await _context.SaveChangesAsync();
+
+            // isActive'i geri döndürüyoruz ki panel kendi state'ini
+            // tahmin etmek yerine sunucunun söylediğine göre güncellesin.
+            return Ok(new
+            {
+                mesaj = dto.IsActive
+                    ? "Ürün satışa açıldı."
+                    : "Ürün satıştan kaldırıldı.",
+                isActive = urun.IsActive
+            });
+        }
+
 
         // 🔴 DELETE /api/products/5
         [Authorize(Roles = "admin")]

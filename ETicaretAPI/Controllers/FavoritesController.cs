@@ -33,7 +33,21 @@ namespace ETicaretAPI.Controllers
 
             var favorites = await _context.Favorites
                 .Where(f => f.UserId == userId)
-                .Join(_context.Products,
+                // ⭐ YENİ — join'in sağ tarafını daraltıyoruz: pasif ürün
+                // favori listesinde çıkmaz.
+                //
+                // Neden Favorites SATIRI silinmiyor, sadece gizleniyor:
+                // Ürün yarın tekrar satışa açılırsa favori kendiliğinden
+                // geri gelir. Kaydı silmek geri dönüşü olmayan bir işlem
+                // olurdu ve müşteri hiçbir şey yapmadığı halde favorisini
+                // kaybederdi.
+                //
+                // Neden join'in İÇİNDE filtreliyoruz da sonrasında değil:
+                // FavoriteDto'ya dönüştükten sonra IsActive bilgisi yok;
+                // filtrelemek için DTO'ya gereksiz bir alan eklemek
+                // gerekirdi. Kaynakta filtrelemek hem daha az veri taşır
+                // hem tek SQL cümlesinde biter.
+                .Join(_context.Products.Where(p => p.IsActive),
                       f => f.ProductId,
                       p => p.Id,
                       (f, p) => new FavoriteDto

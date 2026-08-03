@@ -45,6 +45,7 @@ namespace ETicaretAPI.Controllers
                           ProductName = p.Name,
                           ProductPrice = p.Price,
                           Quantity = c.Quantity,
+                          IsActive = p.IsActive,          // ⭐ YENİ
                           ProductImageUrl = _context.ProductImages
                               .Where(pi => pi.ProductId == p.Id)
                               .OrderByDescending(pi => pi.IsMain)
@@ -92,16 +93,27 @@ namespace ETicaretAPI.Controllers
 
             var userId = GetUserId();
 
-            // Ürün gerçekten var mı?
+            // Ürün gerçekten var mı VE satışta mı?
             //
-            // Bu kontrol yarış koşuluna açık (ürün tam bu anda silinebilir) ama
-            // sorun değil: silinirse aşağıdaki INSERT foreign key hatası verir
-            // ve global hata middleware'i yakalar. Buradaki kontrol güzel mesaj
-            // içindir, koruma değil.
-            var urunVarMi = await _context.Products.AnyAsync(p => p.Id == dto.ProductId);
-            if (!urunVarMi)
+            // İki koşul tek sorguda: "önce var mı bak, sonra aktif mi bak"
+            // demek veritabanına iki tur gitmek olurdu. Aynı satırdan iki
+            // bilgi istiyoruz, tek sorgu yeter.
+            //
+            // ⚠️ Bu kontrol yarış koşuluna açık — ürün tam bu anda pasife
+            // alınabilir. Ve bu SORUN DEĞİL: pasif ürünün sepete girmesi
+            // kimseye zarar vermez, çünkü asıl kilit sipariş anında
+            // (OrdersController'daki atomik UPDATE) duruyor. Buradaki kontrol
+            // kullanıcıya ERKEN ve ANLAŞILIR mesaj vermek için, koruma değil.
+            //
+            // Mesajı bilerek tek tuttuk: "ürün yok" ile "ürün pasif" müşteri
+            // açısından aynı sonuca çıkıyor — alamıyor. İkisini ayırmak
+            // müşteriye kullanamayacağı bir bilgi verirdi.
+            var urunSatistaMi = await _context.Products
+                .AnyAsync(p => p.Id == dto.ProductId && p.IsActive);
+
+            if (!urunSatistaMi)
             {
-                return NotFound(new { mesaj = "Böyle bir ürün yok biladerim!" });
+                return NotFound(new { mesaj = "Bu ürün şu anda satışta değil biladerim!" });
             }
 
             // Lambda içinde kullanacağımız için yerel değişkene alıyoruz

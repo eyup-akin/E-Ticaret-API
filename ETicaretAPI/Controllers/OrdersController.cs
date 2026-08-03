@@ -189,8 +189,25 @@ namespace ETicaretAPI.Controllers
                     //
                     // Ayrıca WHERE koşulu stoğun negatife düşmesini de
                     // veritabanı seviyesinde imkânsız kılıyor.
+
+                    //
+                    // ⭐ YENİ — "&& p.IsActive" KOŞULU
+                    //
+                    // Neden ayrı bir if değil de WHERE'in içinde?
+                    //
+                    // Yukarıda FindAsync ile ürünü çektik. O okuma ile bu
+                    // UPDATE arasında bir zaman aralığı var. Admin tam o
+                    // aralıkta ürünü satıştan kaldırırsa, ayrı bir
+                    // "if (!urun.IsActive) return" kontrolü BAYAT veriye
+                    // bakıyor olurdu ve sipariş yine geçerdi.
+                    //
+                    // Koşulu UPDATE'in WHERE'ine koyunca kontrol ile yazma
+                    // aynı cümlede, aynı satır kilidi altında oluyor.
+                    // Araya kimse giremiyor. Stok kontrolünde uyguladığımız
+                    // desenin aynısı — TOCTOU (oku-kontrol et-yaz) yarışını
+                    // kapatmak.
                     var etkilenenSatir = await _context.Products
-                        .Where(p => p.Id == oge.ProductId && p.Stock >= adet)
+                        .Where(p => p.Id == oge.ProductId && p.IsActive && p.Stock >= adet)
                         .ExecuteUpdateAsync(s => s.SetProperty(
                             p => p.Stock,
                             p => p.Stock - adet));
@@ -202,21 +219,47 @@ namespace ETicaretAPI.Controllers
                     // Ayrı bir SELECT'e gerek yok; cevap UPDATE'in kendisinden
                     // geliyor. "Kontrol et sonra yaz" yerine "yazmayı dene,
                     // sonucuna bak" yaklaşımı.
+
+
                     if (etkilenenSatir == 0)
                     {
-                        // Mesajda doğru sayıyı gösterebilmek için güncel stoğu
-                        // okuyoruz. urun.Stock KULLANILAMAZ — ExecuteUpdateAsync
-                        // change tracker'ı atladığı için bellekteki değer bayat.
-                        var guncelStok = await _context.Products
+                        // ⭐ ARTIK İKİ SEBEP VAR: stok yetersiz VEYA ürün pasif.
+                        // Etkilenen satır sayısı hangisi olduğunu söylemiyor —
+                        // UPDATE sadece "koşul tutmadı" diyor. Doğru mesajı
+                        // verebilmek için satırın güncel halini okuyoruz.
+                        //
+                        // urun.Stock ve urun.IsActive KULLANILAMAZ:
+                        // ExecuteUpdateAsync change tracker'ı atladığı için
+                        // bellekteki nesne bayat.
+                        //
+                        // İki alanı tek sorguda, anonim nesneyle alıyoruz —
+                        // iki ayrı SELECT atmanın anlamı yok.
+                        var durum = await _context.Products
                             .Where(p => p.Id == oge.ProductId)
-                            .Select(p => p.Stock)
+                            .Select(p => new { p.Stock, p.IsActive })
                             .FirstOrDefaultAsync();
 
                         // return → using devreye girer → transaction rollback.
                         // Bu öğeden ÖNCEKİ ürünlerin düşülen stokları geri gelir.
+
+                        // Önce pasifliği kontrol ediyoruz: ürün pasifse stok
+                        // mesajı vermek yanıltıcı olur (stok 500 olabilir ama
+                        // ürün satışta değildir).
+                        if (durum != null && !durum.IsActive)
+                        {
+                            return BadRequest(new
+                            {
+                                mesaj = $"'{urun.Name}' artık satışta değil. " +
+                                        "Sepetinden çıkarıp tekrar dener misin?"
+                            });
+                        }
+
+                        // durum null ise ürün silinmiş demektir; kalan = 0
+                        // göstermek doğru davranış (?? operatörü değil ?.
+                        // kullanıyoruz çünkü durum bir nesne, Stock int).
                         return BadRequest(new
                         {
-                            mesaj = $"'{urun.Name}' için yeterli stok yok! (kalan: {guncelStok})"
+                            mesaj = $"'{urun.Name}' için yeterli stok yok! (kalan: {durum?.Stock ?? 0})"
                         });
                     }
 

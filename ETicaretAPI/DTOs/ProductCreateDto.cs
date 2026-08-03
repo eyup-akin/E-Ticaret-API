@@ -25,5 +25,19 @@ namespace ETicaretAPI.DTOs
 
         [Range(1, int.MaxValue, ErrorMessage = "Geçerli bir kategori seçilmeli!")]
         public int CategoryId { get; set; }
+
+        // ⭐ YENİ — ürün satışa açık mı?
+        //
+        // Neden [Range] veya [Required] yok:
+        // bool'un iki değeri de geçerli. Doğrulanacak bir şey yok.
+        //
+        // Neden = true varsayılanı KRİTİK:
+        // Bu bir "girdi" DTO'su. Admin paneli henüz güncellenmediği için
+        // gönderdiği JSON'da isActive alanı YOK. JSON'da olmayan alan
+        // deserialize edilirken C# başlangıç değerinde kalır. Varsayılanı
+        // false yapsaydık, panelden kaydedilen HER ürün sessizce pasife
+        // düşerdi. true yazarak "bilgi gelmediyse ürün satıştadır" demiş
+        // oluyoruz — geriye dönük uyumluluk.
+        public bool IsActive { get; set; } = true;
     }
 }

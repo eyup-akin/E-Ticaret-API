@@ -25,6 +25,19 @@
         public double AverageRating { get; set; }
         public int ReviewCount { get; set; }
 
+
+        // ⭐ YENİ — ürün satışta mı?
+        //
+        // Neden Cost gibi müşteriden gizlemiyoruz:
+        // Maliyet ticari sır (rakip marjını öğrenir). Aktiflik ise sır değil —
+        // zaten müşteri listesinde pasif ürünler HİÇ görünmeyecek, dolayısıyla
+        // müşteriye giden her kayıtta bu alan zaten true olacak. Gizlemenin
+        // koruduğu bir şey yok, gereksiz özel durum yaratmış oluruz.
+        //
+        // Asıl tüketicisi admin paneli: listede rozet, formda anahtar.
+        public bool IsActive { get; set; }
+
+
         public int FavoriteCount { get; set; }
     }
 }

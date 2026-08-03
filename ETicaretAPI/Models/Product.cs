@@ -18,5 +18,22 @@
         // Bize maliyeti — kâr hesabı için. Müşteriye ASLA gönderilmez.
         // Nullable (decimal?): maliyeti girilmemiş eski ürünler için.
         public decimal? Cost { get; set; }
+
+        // ⭐ YENİ — ürün satışta mı?
+        //
+        // Neden silmek yerine bu bayrak:
+        // Ürün silinirse ona bağlı eski sipariş kalemleri, yorumlar ve
+        // favoriler sahipsiz kalır — geçmiş bozulur. Bayrak sayesinde
+        // kayıt yerinde durur, sadece vitrinden çekilir.
+        //
+        // Neden nullable DEĞİL (bool? değil):
+        // "Bilinmiyor" diye üçüncü bir durum yok. Ürün ya satıştadır ya
+        // değildir. Nullable yapmak her okuma noktasında gereksiz bir
+        // null kontrolü doğururdu.
+        //
+        // = true varsayılanı: yeni eklenen ürün doğrudan satışa açık olsun.
+        // (Eski satırların doldurulması migration'da ayrıca halledilecek —
+        //  C# tarafındaki bu atama veritabanına yansımaz.)
+        public bool IsActive { get; set; } = true;
     }
 }

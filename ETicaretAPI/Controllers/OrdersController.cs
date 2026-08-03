@@ -1166,7 +1166,21 @@ namespace ETicaretAPI.Controllers
                     sehir = x.o.ShippingCity,
                     acikAdres = x.o.ShippingFullAddress,
                     telefon = x.o.ShippingPhone,      // ⭐ User'dan değil, siparişten
-                    email = x.u.Email
+                    email = x.u.Email,
+
+                    // ⭐ YENİ — kargo bilgisi.
+                    // Etiket basılırken genelde HENÜZ YOK (takip numarasını
+                    // kargocu koliyi aldıktan sonra veriyor). Bu yüzden
+                    // etiket bileşeni bu alanları koşullu çiziyor.
+                    kargoFirmasi = x.o.ShippingCompany,
+                    takipNo = x.o.TrackingNumber,
+
+                    // ⭐ YENİ — MÜŞTERİ NOTU.
+                    //
+                    // Etiketteki en kritik eklenti. Notu okuması gereken kişi
+                    // koliyi hazırlayan kişidir ve o kişi ekrana değil
+                    // etikete bakar. Panelde göstermek tek başına yetmez.
+                    musteriNotu = x.o.CustomerNote
                 })
                 .ToListAsync();
 
@@ -1199,6 +1213,16 @@ namespace ETicaretAPI.Controllers
                     s.acikAdres,
                     s.telefon,        // ⭐
                     s.email,
+
+                    // ⭐ YENİ — yukarıdaki sorgudan gelen alanları
+                    // ikinci projeksiyona da taşımak ZORUNLU.
+                    // Anonim nesneler alan alan yeniden kuruluyor;
+                    // burada yazmazsak alan sessizce kaybolur ve
+                    // etikette hiç görünmez (hata da vermez).
+                    s.kargoFirmasi,
+                    s.takipNo,
+                    s.musteriNotu,
+
                     urunCesidi = kalem?.cesit ?? 0,
                     toplamAdet = kalem?.adet ?? 0
                 };

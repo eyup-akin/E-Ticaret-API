@@ -933,6 +933,30 @@ namespace ETicaretAPI.Controllers
                     kartSon4 = x.o.CardLast4,
                     tarih = x.o.CreatedAt,
 
+                    // ⭐ YENİ — kargo takip bilgisi.
+                    //
+                    // Ek sorgu maliyeti YOK: bu alanlar zaten Orders
+                    // tablosunda, aynı SELECT'e iki kolon daha eklemekten
+                    // ibaret. "Detayda var, listede gerekmez" demek için
+                    // bir sebep olsaydı (pahalı JOIN, hassas veri)
+                    // göndermezdik — ikisi de yok.
+                    kargoFirmasi = x.o.ShippingCompany,
+                    takipNo = x.o.TrackingNumber,
+
+                    // ⭐ Müşteri notu VAR MI? Metnin kendisini değil,
+                    // sadece varlığını gönderiyoruz.
+                    //
+                    // Neden metni göndermiyoruz? 500 karakterlik notlar
+                    // 50 satırlık bir listede 25 KB gereksiz veri eder ve
+                    // listede zaten gösterilecek yer yok. Listede lazım
+                    // olan bilgi "bu siparişte okunacak bir not var mı" —
+                    // bir ikon göstermek için bu yeterli. Metnin tamamı
+                    // detay sayfasında zaten geliyor.
+                    //
+                    // Bu genel bir prensip: liste uçları ÖZET, detay
+                    // uçları TAM veri döndürür.
+                    notVarMi = x.o.CustomerNote != null,
+
                     // Kaç ÇEŞİT ürün (satır sayısı)
                     urunCesidi = _context.OrderItems.Count(oi => oi.OrderId == x.o.Id),
 

@@ -49,6 +49,15 @@ builder.Services.AddScoped<ETicaretAPI.Services.TokenService>();
 // Canlıda bu satırı gerçek göndericiyle değiştireceğiz; başka hiçbir yer değişmeyecek.
 builder.Services.AddScoped<ETicaretAPI.Services.IEmailGonderici, ETicaretAPI.Services.KonsolEmailGonderici>();
 
+// ⭐ YENİ — e-posta şablon üreticisi.
+//
+// Neden Scoped, neden Singleton değil?
+// IConfiguration zaten Singleton ve sınıfın başka durumu yok, teknik
+// olarak Singleton da olurdu. Scoped seçtik çünkü projedeki diğer
+// servisler (KuponServisi, IceAktarmaServisi) da Scoped — tutarlılık
+// ve ileride veritabanı erişimi eklemek gerekirse hazır olması için.
+builder.Services.AddScoped<ETicaretAPI.Services.EmailSablonlari>();
+
 
 
 // ⭐ YENİ — dış URL'lerden resim indirebilmek için HttpClient fabrikası

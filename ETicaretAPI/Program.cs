@@ -68,6 +68,9 @@ builder.Services.AddScoped<ETicaretAPI.Services.EmailSablonlari>();
 builder.Services.AddScoped<ETicaretAPI.Services.RaporTarihi>();
 
 
+// ⭐ YENİ — stok hareket defteri yazıcısı
+builder.Services.AddScoped<ETicaretAPI.Services.StokDefteri>();
+
 
 // ⭐ YENİ — dış URL'lerden resim indirebilmek için HttpClient fabrikası
 builder.Services.AddHttpClient();

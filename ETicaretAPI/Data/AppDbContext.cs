@@ -24,6 +24,9 @@ namespace ETicaretAPI.Data
         public DbSet<Favorite> Favorites { get; set; }
         public DbSet<AuditLog> AuditLogs { get; set; }
         public DbSet<Review> Reviews { get; set; }
+
+        // ⭐ YENİ — stok hareket defteri
+        public DbSet<StockMovement> StockMovements { get; set; }
         public DbSet<ImportJob> ImportJobs { get; set; } // ⭐ YENİ
 
         public DbSet<RefreshToken> RefreshTokens { get; set; } // ⭐ YENİ
@@ -127,6 +130,40 @@ namespace ETicaretAPI.Data
             {
                 e.Property(x => x.FileName).HasMaxLength(260);
                 e.Property(x => x.Status).HasMaxLength(20);
+            });
+
+            // ⭐ YENİ — stok hareket defteri
+            modelBuilder.Entity<StockMovement>(e =>
+            {
+                // ⚠️ EN ÖNEMLİ İNDEKS.
+                //
+                // Bu tablonun ana kullanımı: "şu ürünün hareketleri,
+                // en yeniden eskiye". İndeks tam bu sorguya göre
+                // kurulmuş.
+                //
+                // Kolon sırası önemli: önce ProductId (eşitlik
+                // filtresi), sonra CreatedAt (sıralama). Ters sırada
+                // olsaydı SQL Server tüm tabloyu tarayıp sonra
+                // filtrelerdi.
+                //
+                // ⚠️ Bu tablo diğerlerinden HIZLI büyür: her sipariş
+                // kalemi bir satır demek. İndeks olmadan bir yıl
+                // sonra ürün detay sayfası açılmazdı.
+                e.HasIndex(s => new { s.ProductId, s.CreatedAt });
+
+                // Sebep kısa ve sabit bir metin — nvarchar(max)
+                // olmasına gerek yok. Ayrıca ileride bu kolona
+                // indeks gerekirse (rapor filtresi) sınırlı
+                // uzunluk şart: nvarchar(max) indekslenemez.
+                e.Property(s => s.Sebep)
+                 .HasMaxLength(30)
+                 .IsRequired();
+
+                e.Property(s => s.ReferansTipi)
+                 .HasMaxLength(30);
+
+                e.Property(s => s.Aciklama)
+                 .HasMaxLength(300);
             });
 
             // ⭐ YENİ — REFRESH TOKEN yapılandırması

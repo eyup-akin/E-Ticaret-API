@@ -1,10 +1,12 @@
-﻿using ETicaretAPI.Data;
+﻿
+using ETicaretAPI.Data;
 using ETicaretAPI.DTOs;
 using ETicaretAPI.Models;
 using ETicaretAPI.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+
 using System.Security.Claims;
 
 namespace ETicaretAPI.Controllers
@@ -32,14 +34,19 @@ namespace ETicaretAPI.Controllers
         private readonly IEmailGonderici _email;
         private readonly EmailSablonlari _sablonlar;
         private readonly ILogger<OrdersController> _log;
+        // ⭐ YENİ — stok hareket defteri
+        private readonly StokDefteri _defter;
 
         public OrdersController(
+
             AppDbContext context,
             IConfiguration config,
             KuponServisi kuponServisi,                    // ⭐
             IEmailGonderici email,                        // ⭐ YENİ
             EmailSablonlari sablonlar,                    // ⭐ YENİ
+            StokDefteri defter,
             ILogger<OrdersController> log)                // ⭐ YENİ
+
         {
             _context = context;
             _config = config;
@@ -47,6 +54,7 @@ namespace ETicaretAPI.Controllers
             _email = email;
             _sablonlar = sablonlar;
             _log = log;
+            _defter = defter;
         }
 
         private int GetUserId()
@@ -218,6 +226,18 @@ namespace ETicaretAPI.Controllers
                 decimal toplamTutar = 0;
                 var siparisDetaylari = new List<OrderItem>();
 
+                // ⭐ YENİ — stok hareketleri BURADA BİRİKTİRİLİYOR,
+                // context'e henüz eklenmiyor.
+                //
+                // Sebep: bu hareketlerin ReferansId'si siparişin Id'si
+                // olacak ve o Id henüz yok. Context'e erken eklersek,
+                // aşağıdaki ilk SaveChangesAsync onları da yazar ve
+                // ReferansId kalıcı olarak NULL kalır.
+                //
+                // siparisDetaylari listesi de tam olarak aynı sebeple
+                // var — OrderItem'ların da OrderId'si sonradan doluyor.
+                var stokHareketleri = new List<StockMovement>();
+
                 // 5) Her sepet öğesi için: ürünü bul, stoğu ATOMİK düş, fiyatı dondur
                 //
                 // ⚠️ ESKİ KOD YARIŞ KOŞULUNA AÇIKTI:
@@ -331,6 +351,40 @@ namespace ETicaretAPI.Controllers
                             mesaj = $"'{urun.Name}' için yeterli stok yok! (kalan: {durum?.Stock ?? 0})"
                         });
                     }
+
+
+                    // ⭐ YENİ — STOK HAREKETİ (satış)
+                    //
+                    // ⚠️ ÖNCEKİ STOĞU NEREDEN BİLİYORUZ?
+                    // urun.Stock, FindAsync ile okunduğu andaki değer.
+                    // ExecuteUpdateAsync veritabanını değiştirdi ama
+                    // bellekteki nesneye haber vermedi — yani urun.Stock
+                    // hâlâ DÜŞÜŞTEN ÖNCEKİ değeri taşıyor. Bize tam
+                    // olarak o lazım.
+                    //
+                    // Bu, normalde "bayat veri" diye kaçındığımız durumun
+                    // işimize yaradığı nadir bir yer. Düşüşün gerçekten
+                    // olduğunu yukarıda etkilenenSatir == 1 ile
+                    // doğruladık.
+                    //
+                    // ⚠️ Ekle() DEĞİL Olustur() ÇAĞIRIYORUZ.
+                    // Ekle() nesneyi context'e koyardı ve aşağıdaki ilk
+                    // SaveChangesAsync onu ReferansId=NULL olarak diske
+                    // yazardı. Listede bekletip, sipariş Id'si oluştuktan
+                    // sonra topluca ekliyoruz.
+                    stokHareketleri.Add(_defter.Olustur(
+                        urunId: urun.Id,
+                        miktar: -adet,              // satış = eksi
+                        oncekiStok: urun.Stock,
+                        sebep: StokSebep.Satis,
+                        kullaniciId: userId,
+                        referansTipi: "Order",
+
+                        // referansId'yi aşağıda, sipariş kaydedildikten
+                        // sonra dolduracağız.
+                        referansId: null));
+
+
 
                     // ⚠️ DİKKAT — urun.Stock'a BİLEREK DOKUNMUYORUZ.
                     //
@@ -598,6 +652,27 @@ namespace ETicaretAPI.Controllers
                     detay.OrderId = siparis.Id;
                     _context.OrderItems.Add(detay);
                 }
+
+                // ⭐ YENİ — stok hareketlerini siparişe bağla ve context'e ekle.
+                //
+                // Bu döngü, hemen üstündeki OrderItem döngüsüyle aynı
+                // işi yapıyor: yukarıda üretilip bekletilen nesnelere
+                // siparişin Id'sini yazıp context'e koymak.
+                //
+                // ⚠️ NEDEN BURADA, NEDEN YUKARIDA DEĞİL?
+                // siparis.Id, bir üstteki SaveChangesAsync çağrısında
+                // veritabanı tarafından üretildi. Ondan önce 0'dı.
+                //
+                // AddRange: tek tek Add çağırmakla aynı sonucu verir,
+                // sadece daha okunaklı.
+                foreach (var hareket in stokHareketleri)
+                {
+                    hareket.ReferansId = siparis.Id;
+                }
+
+                _context.StockMovements.AddRange(stokHareketleri);
+
+
 
                 // 7b) KUPON KULLANIM KAYDI
                 if (kullanilanKupon != null)
@@ -867,12 +942,36 @@ namespace ETicaretAPI.Controllers
 
             try
             {
-                // 1) Stoğu geri ver
+                // 1) Stoğu geri ver + DEFTERE YAZ
                 foreach (var kalem in kalemler)
                 {
                     var urun = await _context.Products.FindAsync(kalem.ProductId);
+
                     if (urun != null)
                     {
+                        // ⭐ Hareketi stoğu DEĞİŞTİRMEDEN ÖNCE yazıyoruz.
+                        //
+                        // Sıra önemli: urun.Stock += ... satırından
+                        // sonra yazsaydık "önceki stok" olarak zaten
+                        // artmış değeri kaydederdik ve defter
+                        // kendi içinde tutarsız olurdu.
+                        _defter.Ekle(
+                            urunId: urun.Id,
+                            miktar: kalem.Quantity,      // iade = artı
+                            oncekiStok: urun.Stock,
+                            sebep: StokSebep.IptalIadesi,
+                            kullaniciId: userId,
+                            referansTipi: "Order",
+                            referansId: order.Id);
+
+                        // ⚠️ Burada ExecuteUpdate DEĞİL, normal
+                        // atama kullanıyoruz — bu bilinçli.
+                        //
+                        // Yarış koşulu her yazmada olmaz: yazılan
+                        // değer okunan değere bağlıysa (x = x + n)
+                        // yarış var. Ama burada iki eşzamanlı iptal
+                        // aynı siparişi iptal edemez (durum kontrolü
+                        // engelliyor), o yüzden risk yok.
                         urun.Stock += kalem.Quantity;
                     }
                 }
@@ -1608,7 +1707,7 @@ namespace ETicaretAPI.Controllers
 
             try
             {
-                // 1) STOĞU GERİ VER
+                // 1) STOĞU GERİ VER + DEFTERE YAZ
                 // Sipariş verilirken stok düşülmüştü; iptal edilince o ürünler
                 // tekrar satılabilir olmalı.
                 foreach (var kalem in kalemler)
@@ -1617,6 +1716,41 @@ namespace ETicaretAPI.Controllers
 
                     if (urun != null)
                     {
+                        // ⭐ Hareketi stok DEĞİŞMEDEN ÖNCE yazıyoruz.
+                        //
+                        // Sıra kritik: urun.Stock += ... satırından sonra
+                        // yazsaydık "önceki stok" olarak zaten artmış
+                        // değeri kaydederdik. Defter kendi içinde
+                        // tutarsız olur, "önceki + miktar = sonraki"
+                        // eşitliği bozulurdu.
+                        //
+                        // ⚠️ Burada Ekle() kullanıyoruz, Olustur() değil.
+                        // Fark: siparişin Id'si ZATEN VAR (iptal edilen
+                        // sipariş çoktan kaydedilmiş), referansı baştan
+                        // verebiliyoruz. Erteleme gerekmiyor.
+                        //
+                        // ⚠️ kullaniciId burada ADMİN'in id'si, siparişin
+                        // sahibinin değil. Defterin sorusu "kim yaptı",
+                        // "kime yapıldı" değil. Müşteri iptalinde müşteri,
+                        // admin iptalinde admin yazılıyor — bunlar farklı
+                        // olaylar ve denetimde ayırt edilebilmeli.
+                        _defter.Ekle(
+                            urunId: urun.Id,
+                            miktar: kalem.Quantity,      // iade = artı
+                            oncekiStok: urun.Stock,
+                            sebep: StokSebep.IptalIadesi,
+                            kullaniciId: GetUserId(),
+                            referansTipi: "Order",
+                            referansId: order.Id,
+                            aciklama: "Admin tarafından iptal edildi");
+
+                        // ⚠️ Burada ExecuteUpdate DEĞİL, normal atama
+                        // kullanıyoruz — bu bilinçli.
+                        //
+                        // Yarış koşulu her yazmada olmaz: yazılan değer
+                        // okunan değere bağlıysa (x = x + n) yarış var.
+                        // Ama iki eşzamanlı iptal aynı siparişi iptal
+                        // edemez — yukarıdaki durum kontrolü engelliyor.
                         urun.Stock += kalem.Quantity;
                     }
                 }

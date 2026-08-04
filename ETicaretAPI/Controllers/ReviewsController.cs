@@ -147,5 +147,135 @@ namespace ETicaretAPI.Controllers
                       (o, oi) => oi)
                 .AnyAsync(oi => oi.ProductId == productId);
         }
+
+
+        // ============================================================
+        //  🔴 PUT /api/admin/reviews/5/gizle
+        //  🔴 PUT /api/admin/reviews/5/goster
+        //
+        //  NEDEN ROTA MUTLAK (başında "/" var)?
+        //  Bu controller'ın sınıf rotası "api/products/{productId}/reviews".
+        //  Metot rotasına düz "gizle" yazsaydık adres şöyle olurdu:
+        //      /api/products/{productId}/reviews/gizle
+        //  Yani admin, yorumu gizlemek için ürün id'sini de bilmek
+        //  zorunda kalırdı — oysa yorum id'si zaten tekil.
+        //
+        //  Başına "/" koyunca ASP.NET sınıf rotasını yok sayıp adresi
+        //  kökten alıyor. Bu deseni OrdersController'da da kullandık
+        //  (/api/admin/orders/{id}) — müşteri ve admin uçları aynı
+        //  dosyada, farklı adres ağacında yaşıyor.
+        //
+        //  NEDEN PUT, POST DEĞİL?
+        //  Bu bir DURUM DEĞİŞTİRME. Aynı isteği iki kez göndermek aynı
+        //  sonucu verir (idempotent) — PUT'un tanımı budur. POST "yeni
+        //  bir şey yarat" demektir, burada yaratılan bir şey yok.
+        //
+        //  NEDEN DELETE DEĞİL?
+        //  Kaydı silmiyoruz; zaten tüm mesele silmemek.
+        // ============================================================
+        [Authorize(Roles = "admin")]
+        [HttpPut("/api/admin/reviews/{id}/gizle")]
+        public async Task<IActionResult> YorumuGizle(int id)
+        {
+            return await GorunurlukDegistir(id, gizle: true);
+        }
+
+        [Authorize(Roles = "admin")]
+        [HttpPut("/api/admin/reviews/{id}/goster")]
+        public async Task<IActionResult> YorumuGoster(int id)
+        {
+            return await GorunurlukDegistir(id, gizle: false);
+        }
+
+
+        // ------------------------------------------------------------
+        //  İki ucun ORTAK gövdesi.
+        //
+        //  Neden tek metot? Gizleme ile gösterme arasındaki tek fark
+        //  bir bool. İki ayrı metot yazsaydık denetim kaydı, hata
+        //  yönetimi ve kullanıcı bulma kodu iki kez yazılırdı; birinde
+        //  yapılan düzeltme diğerine unutulurdu.
+        //
+        //  Ama URL'ler AYRI kaldı. Neden?
+        //  "/gorunurluk?gizle=true" gibi tek bir uç yazsaydık, çağıran
+        //  taraf parametreyi yanlış göndererek ters işlem yapabilirdi.
+        //  Niyet adreste açıkça yazılı olsun: uç ayrı, gövde ortak.
+        // ------------------------------------------------------------
+        private async Task<IActionResult> GorunurlukDegistir(int id, bool gizle)
+        {
+            var yorum = await _context.Reviews.FindAsync(id);
+
+            if (yorum == null)
+            {
+                return NotFound(new { mesaj = "Yorum bulunamadı." });
+            }
+
+            // Zaten istenen durumdaysa boşuna yazma.
+            //
+            // Neden hata değil, başarı dönüyoruz? İşin SONUCU istenen
+            // durum — o sağlanmış. İki sekmede aynı butona basan admin
+            // hata mesajı görmemeli. (İdempotentlik böyle davranır.)
+            if (yorum.IsHidden == gizle)
+            {
+                return Ok(new
+                {
+                    mesaj = gizle ? "Yorum zaten gizli." : "Yorum zaten görünür.",
+                    gizli = yorum.IsHidden
+                });
+            }
+
+            yorum.IsHidden = gizle;
+
+            // ---- DENETİM KAYDI ----
+            //
+            // Neden kayıt tutuyoruz? Gizlemenin tüm gerekçesi
+            // "denetlenebilir kalsın"dı. Sessizce gizlersek silmekten
+            // farkı kalmaz: yorum kaybolur ve kimin kaldırdığı bilinmez.
+            //
+            // ⚠️ TargetUserId burada yorumu YAZAN kişi. AuditLog
+            // "kim kime ne yaptı" tablosu; burada işlem yorum üzerinden
+            // ama etkilenen kişi yorum sahibi.
+            var adminId = GetUserId();
+
+            var admin = await _context.Users
+                .Where(u => u.Id == adminId)
+                .Select(u => u.FullName)
+                .FirstOrDefaultAsync() ?? "Bilinmiyor";
+
+            var yorumSahibi = await _context.Users
+                .Where(u => u.Id == yorum.UserId)
+                .Select(u => u.FullName)
+                .FirstOrDefaultAsync() ?? "Bilinmiyor";
+
+            _context.AuditLogs.Add(new AuditLog
+            {
+                ActorUserId = adminId,
+                ActorName = admin,
+                TargetUserId = yorum.UserId,
+                TargetName = yorumSahibi,
+                Action = gizle ? "yorum_gizlendi" : "yorum_gosterildi",
+
+                // Eski/yeni değer alanlarına yorumun kimliğini yazıyoruz.
+                // Denetim ekranında "hangi yorum" sorusunun cevabı
+                // olmadan kayıt işe yaramaz.
+                OldValue = $"Yorum #{yorum.Id} ({yorum.Rating} yıldız) - gizli: {!gizle}",
+                NewValue = $"Yorum #{yorum.Id} ({yorum.Rating} yıldız) - gizli: {gizle}"
+            });
+
+            // Tek SaveChanges: yorum güncellemesi ve denetim kaydı
+            // aynı işlemde yazılır. Ayrı ayrı kaydetseydik ikincisi
+            // başarısız olduğunda kayıtsız bir değişiklik kalırdı.
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                mesaj = gizle
+                    ? "Yorum gizlendi. Müşterilere gösterilmeyecek ve puan ortalamasına girmeyecek."
+                    : "Yorum tekrar görünür yapıldı.",
+                gizli = yorum.IsHidden
+            });
+        }
+
+
     }
 }

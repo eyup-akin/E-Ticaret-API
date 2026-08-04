@@ -14,9 +14,18 @@ namespace ETicaretAPI.Controllers
     {
         private readonly AppDbContext _context;
 
-        public AdminController(AppDbContext context)
+        // ⭐ YENİ — gün sınırlarını yerel saate göre hesaplamak için.
+        // Dashboard'daki "son 7 gün" grafiği UTC gününe göre
+        // gruplandığı için Türkiye saatiyle gece 00:00–03:00 arası
+        // siparişler bir ÖNCEKİ günün kutusuna düşüyordu.
+        private readonly ETicaretAPI.Services.RaporTarihi _tarih;
+
+        public AdminController(
+            AppDbContext context,
+            ETicaretAPI.Services.RaporTarihi tarih)
         {
             _context = context;
+            _tarih = tarih;
         }
 
         // 🔴 GET /api/admin/users
@@ -306,20 +315,53 @@ namespace ETicaretAPI.Controllers
             }
 
             // ---------- 2) SON 7 GÜNÜN GÜNLÜK GELİRİ (grafik için) ----------
-            var yediGunOnce = simdi.Date.AddDays(-6);
+            // ⭐ DÜZELTİLDİ — gün sınırı artık YEREL saate göre.
+            //
+            // ESKİ HATA: simdi.Date UTC gününü alıyordu ve
+            // p.PaidAt.Date de UTC gününe göre grupluyordu. Türkiye
+            // UTC+3 olduğu için gece 00:00–03:00 arasında verilen her
+            // sipariş grafikte bir ÖNCEKİ güne yazılıyordu.
+            //
+            // Hiçbir hata mesajı çıkmıyordu; grafik çiziliyordu, sayılar
+            // makul görünüyordu. Sadece yanlıştı.
+            //
+            // RaporTarihi.Aralik() son 7 günü yerel gün sınırlarıyla
+            // hesaplayıp UTC karşılığını veriyor — rapor uçlarıyla
+            // birebir aynı mantık, tek yerden.
+            var grafikAraligi = _tarih.Aralik(
+                _tarih.YereleCevir(DateTime.UtcNow).Date.AddDays(-6),
+                null);
 
-            // Önce ham ödemeleri çek, sonra bellekte günlere böl
             var hamOdemeler = await _context.Payments
-                .Where(p => p.Status == "basarili" && p.PaidAt >= yediGunOnce)
+                .Where(p => p.Status == "basarili"
+                         && p.PaidAt >= grafikAraligi.BaslangicUtc
+                         && p.PaidAt < grafikAraligi.BitisUtcHaric)
                 .Select(p => new { p.PaidAt, p.Amount })
                 .ToListAsync();
 
+            // ⚠️ Gruplama neden BELLEKTE?
+            // UTC → yerel çevrimini SQL'de yapamıyoruz; EF Core
+            // TimeZoneInfo metodlarını SQL'e çeviremiyor. Filtre zaten
+            // veriyi 7 güne indirdi, kalan iş bellekte ucuz.
+            //
+            // Ham veriyi bir kez çevirip listeye alıyoruz — döngünün
+            // içinde çevirseydik her ödeme 7 kez çevrilirdi.
+            var yerelOdemeler = hamOdemeler
+                .Select(p => new
+                {
+                    Gun = _tarih.YereleCevir(p.PaidAt).Date,
+                    p.Amount
+                })
+                .ToList();
+
             var gunlukGelir = new List<object>();
+
             for (int i = 0; i < 7; i++)
             {
-                var gun = yediGunOnce.AddDays(i);
-                var toplam = hamOdemeler
-                    .Where(p => p.PaidAt.Date == gun)
+                var gun = grafikAraligi.BaslangicYerel.AddDays(i);
+
+                var toplam = yerelOdemeler
+                    .Where(p => p.Gun == gun)
                     .Sum(p => p.Amount);
 
                 gunlukGelir.Add(new

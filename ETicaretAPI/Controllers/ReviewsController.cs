@@ -30,7 +30,17 @@ namespace ETicaretAPI.Controllers
         public async Task<IActionResult> GetReviews(int productId)
         {
             var reviews = await _context.Reviews
-                .Where(r => r.ProductId == productId)
+                // ⭐ YENİ — gizlenmiş yorumlar müşteriye gösterilmez.
+                //
+                // Neden filtreyi buraya, sorguya koyuyoruz?
+                // Alternatif, hepsini çekip bellekte elemekti. Yanlış
+                // olurdu: gizli yorum ağdan geçmese bile veritabanından
+                // gelmiş olurdu ve ileride sayfalama eklendiğinde
+                // "10 yorum iste, 7 tane gel" gibi tuhaflıklar çıkardı.
+                //
+                // Filtre ne kadar erken uygulanırsa o kadar iyi:
+                // veritabanı > bellek > ekran.
+                .Where(r => r.ProductId == productId && !r.IsHidden)
                 .OrderByDescending(r => r.CreatedAt)
                 .Join(_context.Users,
                       r => r.UserId,

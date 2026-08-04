@@ -71,31 +71,34 @@ namespace ETicaretAPI.Controllers
                 .FirstOrDefaultAsync() ?? string.Empty;
         }
 
-        // ⭐ YENİ — sipariş maili için ürün satırları.
+        // Sipariş maili için ürün satırları.
         //
         // Neden OrderItem listesini doğrudan şablona vermiyoruz?
-        // OrderItem'da ürün ADI yok, sadece ProductId var. Şablonun
-        // veritabanına gitmesi ise katman ihlali olurdu: şablonun tek
-        // işi metin üretmek.
+        // Şablonun tek işi metin üretmek — veri hazırlamak çağıranın
+        // görevi. Şablona entity verirsek şablon veritabanı şemasına
+        // bağımlı hale gelir ve model değişince şablon da bozulur.
         //
-        // ⚠️ ProductName'i Products tablosundan CANLI okuyoruz, oysa
-        // fiyat dondurulmuş (oi.UnitPrice). Tutarsız gibi duruyor ama
-        // değil: para dondurulur çünkü hukuki bir kayıttır. Ürün adı
-        // dondurulmaz çünkü OrderItem'da böyle bir alan yok ve müşteri
-        // için ürünün GÜNCEL adını görmek daha faydalı ("Akıllı Saat"
-        // yerine "Akıllı Saat Pro" yazsa bile aynı ürünü tanır).
+        // ⭐ DEĞİŞTİ — ürün adı artık Products tablosundan CANLI
+        // okunmuyor, kalemin İÇİNDEKİ donmuş addan alınıyor.
         //
-        // Not: ürün silinirse bu join satırı düşürür ve mailde o kalem
-        // görünmez. Aşama 0.1'de ürünlere pasife alma özelliği ekledik
-        // — artık silmek nadir bir işlem, bu risk kabul edilebilir.
+        // Eski hali Join(_context.Products, ...) yapıyordu ve iki
+        // sorunu vardı:
+        //   1) Müşteri mailde, sipariş verdiği ürünün adını değil
+        //      BUGÜNKÜ adını görüyordu
+        //   2) Ürün silinmişse INNER JOIN o satırı düşürüyor ve mailde
+        //      kalem hiç görünmüyordu — toplam tutar ile kalemler
+        //      birbirini tutmuyordu
+        //
+        // Artık JOIN yok: tek tablodan okuyoruz, hem daha doğru hem
+        // daha ucuz.
         private async Task<List<EmailSiparisKalemi>> EmailKalemleriGetirAsync(int orderId)
         {
             return await _context.OrderItems
                 .Where(oi => oi.OrderId == orderId)
-                .Join(_context.Products,
-                      oi => oi.ProductId,
-                      p => p.Id,
-                      (oi, p) => new EmailSiparisKalemi(p.Name, oi.Quantity, oi.UnitPrice))
+                .Select(oi => new EmailSiparisKalemi(
+                    oi.ProductName,   // ⭐ donmuş ad
+                    oi.Quantity,
+                    oi.UnitPrice))
                 .ToListAsync();
         }
 
@@ -737,18 +740,21 @@ namespace ETicaretAPI.Controllers
                     DeliveredAt = o.DeliveredAt,
                     CustomerNote = o.CustomerNote,
 
+                    // ⭐ DEĞİŞTİ — Products JOIN'i kaldırıldı.
+                    // Ürün adı kalemin içinde donmuş halde duruyor.
                     Items = _context.OrderItems
                         .Where(oi => oi.OrderId == o.Id)
-                        .Join(_context.Products,
-                              oi => oi.ProductId,
-                              p => p.Id,
-                              (oi, p) => new OrderItemDto
-                              {
-                                  ProductId = p.Id,
-                                  ProductName = p.Name,
-                                  Quantity = oi.Quantity,
-                                  UnitPrice = oi.UnitPrice
-                              })
+                        .Select(oi => new OrderItemDto
+                        {
+                            // ⚠️ ARTIK p.Id DEĞİL oi.ProductId.
+                            // Ürün silinmişse p diye bir şey yok;
+                            // kalemin kendi ProductId'si her zaman var.
+                            ProductId = oi.ProductId,
+
+                            ProductName = oi.ProductName,   // ⭐ donmuş ad
+                            Quantity = oi.Quantity,
+                            UnitPrice = oi.UnitPrice
+                        })
                         .ToList()
                 })
                 .ToListAsync();
@@ -770,18 +776,16 @@ namespace ETicaretAPI.Controllers
                 return NotFound(new { mesaj = "Sipariş bulunamadı!" });
             }
 
+            // ⭐ DEĞİŞTİ — JOIN kaldırıldı, donmuş ad okunuyor.
             var items = await _context.OrderItems
                 .Where(oi => oi.OrderId == id)
-                .Join(_context.Products,
-                      oi => oi.ProductId,
-                      p => p.Id,
-                      (oi, p) => new OrderItemDto
-                      {
-                          ProductId = p.Id,
-                          ProductName = p.Name,
-                          Quantity = oi.Quantity,
-                          UnitPrice = oi.UnitPrice
-                      })
+                .Select(oi => new OrderItemDto
+                {
+                    ProductId = oi.ProductId,
+                    ProductName = oi.ProductName,
+                    Quantity = oi.Quantity,
+                    UnitPrice = oi.UnitPrice
+                })
                 .ToListAsync();
 
             var dto = new OrderDto
@@ -1104,12 +1108,12 @@ namespace ETicaretAPI.Controllers
                     // ⭐ İLK 2 ÜRÜNÜN ADI — listede önizleme için.
                     //    Tümünü değil sadece 2'sini çekiyoruz; gerisi detayda.
                     //    Bu da alt sorgu olarak TEK SQL'e gömülür (N+1 yok).
+                    // ⭐ DEĞİŞTİ — JOIN kaldırıldı.
+                    // Bu alt sorgu yine ana SQL'e gömülüyor (N+1 yok),
+                    // sadece artık ikinci bir tabloya uğramıyor.
                     ilkUrunler = _context.OrderItems
                         .Where(oi => oi.OrderId == x.o.Id)
-                        .Join(_context.Products,
-                              oi => oi.ProductId,
-                              p => p.Id,
-                              (oi, p) => p.Name)
+                        .Select(oi => oi.ProductName)
                         .Take(2)
                         .ToList()
                 })
@@ -1162,19 +1166,22 @@ namespace ETicaretAPI.Controllers
                 telefon = order.ShippingPhone        // ⭐
             };
 
+            // ⭐ DEĞİŞTİ — JOIN kaldırıldı, donmuş ad okunuyor.
+            //
+            // Ayrıca "maliyet" alanını BİLEREK eklemiyoruz: sipariş
+            // detayı ekranı satış bilgisi gösterir, kâr analizi
+            // Raporlar sayfasının işi. Aynı veriyi her ekrana serpmek
+            // ekranların amacını bulanıklaştırır.
             var kalemler = await _context.OrderItems
                 .Where(oi => oi.OrderId == id)
-                .Join(_context.Products,
-                      oi => oi.ProductId,
-                      p => p.Id,
-                      (oi, p) => new
-                      {
-                          urunId = p.Id,
-                          urunAdi = p.Name,
-                          adet = oi.Quantity,
-                          birimFiyat = oi.UnitPrice,
-                          araToplam = oi.Quantity * oi.UnitPrice
-                      })
+                .Select(oi => new
+                {
+                    urunId = oi.ProductId,
+                    urunAdi = oi.ProductName,
+                    adet = oi.Quantity,
+                    birimFiyat = oi.UnitPrice,
+                    araToplam = oi.Quantity * oi.UnitPrice
+                })
                 .ToListAsync();
 
             var odeme = await _context.Payments

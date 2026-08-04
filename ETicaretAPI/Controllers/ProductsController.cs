@@ -96,7 +96,17 @@ namespace ETicaretAPI.Controllers
             var idler = urunler.Select(u => u.Id).ToList();
 
             var puanlar = await _context.Reviews
-                .Where(r => idler.Contains(r.ProductId))
+                // ⭐ YENİ — gizli yorumlar ortalamaya ve sayıya girmez.
+                //
+                // Bu satır olmasaydı iş yarım kalırdı: yorum listeden
+                // kaybolur ama verdiği 1 yıldız ortalamayı aşağı
+                // çekmeye devam ederdi. Ekranda "5 yorum (2,4 puan)"
+                // yazıp altta 4 yorum listelenirdi — kullanıcı beşinci
+                // yorumu arar, bulamaz.
+                //
+                // Kural: bir kaydı görünürlükten çıkarıyorsan, o kayıttan
+                // TÜRETİLEN her şeyi de çıkarmalısın.
+                .Where(r => idler.Contains(r.ProductId) && !r.IsHidden)
                 .GroupBy(r => r.ProductId)
                 .Select(g => new
                 {

@@ -464,6 +464,168 @@ namespace ETicaretAPI.Controllers
         }
 
 
+        // ============================================================
+        //  🟣 GET /api/admin/audit-logs
+        //     ?arama=&islem=&baslangic=&bitis=&page=1&pageSize=20
+        //
+        //  DENETİM KAYDI — "kim, kimi, ne zaman, ne yaptı?"
+        //
+        //  NEDEN SADECE SÜPERADMİN?
+        //  Bu tablo ADMİNLERİN ne yaptığını gösteriyor. Adminin
+        //  başkalarının izini görebilmesi, denetlenen kişinin
+        //  denetim mekanizmasına erişmesi demektir — ve kendi izini
+        //  kimin takip ettiğini öğrenir.
+        //
+        //  Denetim mekanizmasının denetlenenden ayrı tutulması
+        //  temel bir güvenlik ilkesidir.
+        // ============================================================
+        [Authorize(Roles = "superadmin")]
+        [HttpGet("audit-logs")]
+        public async Task<IActionResult> GetAuditLogs(
+            [FromQuery] string? arama,
+            [FromQuery] string? islem,
+            [FromQuery] DateTime? baslangic,
+            [FromQuery] DateTime? bitis,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 20)
+        {
+            // Sayfalama parametrelerini güvenli aralığa çek.
+            //
+            // Neden hata döndürmüyoruz? Bunlar kullanıcının elle
+            // yazdığı değerler değil, arayüzün gönderdiği teknik
+            // parametreler. Bozuk gelirse makul bir varsayılana
+            // düşmek, hata ekranı göstermekten iyi.
+            //
+            // pageSize'a ÜST SINIR şart: 999999 gönderen bir istek
+            // tüm tabloyu belleğe çeker — bu bir servis dışı bırakma
+            // (DoS) kapısıdır.
+            if (page < 1)
+            {
+                page = 1;
+            }
+
+            if (pageSize < 1 || pageSize > 100)
+            {
+                pageSize = 20;
+            }
+
+            // ⭐ Aşama 2'de yazdığımız RaporTarihi servisini
+            // yeniden kullanıyoruz.
+            //
+            // Gün sınırı yerel saate göre hesaplanıyor: Türkiye'de
+            // gece 01:00'da yapılan bir rol değişikliği, UTC'de bir
+            // önceki güne düşer. Raporlarda çözdüğümüz problemin
+            // aynısı — çözümü de aynı, çünkü tek yerde yaşıyor.
+            var aralik = _tarih.Aralik(baslangic, bitis);
+
+            // ⚠️ IQueryable: sorgu henüz veritabanına GİTMEDİ.
+            // Aşağıda koşullu olarak filtre ekleyeceğiz, hepsi
+            // TEK SQL'e derlenecek.
+            //
+            // List olsaydı tüm tabloyu belleğe çekip orada elerdik.
+            var sorgu = _context.AuditLogs
+                .Where(l => l.CreatedAt >= aralik.BaslangicUtc
+                         && l.CreatedAt < aralik.BitisUtcHaric);
+
+            // ---- İŞLEM TİPİ FİLTRESİ ----
+            if (!string.IsNullOrWhiteSpace(islem))
+            {
+                sorgu = sorgu.Where(l => l.Action == islem);
+            }
+
+            // ---- İSİM ARAMASI ----
+            //
+            // Hem işlemi YAPAN hem işlem YAPILAN kişide arıyoruz.
+            //
+            // Neden ikisi birden? Kullanıcı "Ahmet" yazdığında ne
+            // kastettiğini bilemeyiz: "Ahmet ne yaptı" mı, "Ahmet'e
+            // ne yapıldı" mı? İkisini de döndürmek, iki ayrı arama
+            // kutusu koymaktan daha kullanışlı.
+            if (!string.IsNullOrWhiteSpace(arama))
+            {
+                var a = arama.Trim();
+
+                sorgu = sorgu.Where(l =>
+                    l.ActorName.Contains(a) || l.TargetName.Contains(a));
+            }
+
+            // ⚠️ TOPLAM SAYIYI FİLTRELERDEN SONRA, SAYFALAMADAN
+            // ÖNCE alıyoruz.
+            //
+            // Sayfalamadan sonra alsaydık her zaman en fazla
+            // pageSize kadar çıkardı ve "toplam 340 kayıt" bilgisi
+            // yanlış olurdu.
+            var toplam = await sorgu.CountAsync();
+
+            var loglar = await sorgu
+                // En yeni üstte — denetim kaydına bakan kişi
+                // "en son ne oldu" sorusuyla gelir.
+                .OrderByDescending(l => l.CreatedAt)
+
+                // Skip + Take = sayfalama. SQL'de OFFSET/FETCH olur.
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+
+                .Select(l => new
+                {
+                    l.Id,
+
+                    yapanId = l.ActorUserId,
+                    yapan = l.ActorName,
+
+                    hedefId = l.TargetUserId,
+                    hedef = l.TargetName,
+
+                    islem = l.Action,
+                    eski = l.OldValue,
+                    yeni = l.NewValue,
+
+                    tarih = l.CreatedAt
+                })
+                .ToListAsync();
+
+            // ---- MEVCUT İŞLEM TİPLERİ ----
+            //
+            // NEDEN VERİTABANINDAN OKUYORUZ, NEDEN SABİT LİSTE DEĞİL?
+            //
+            // Sabit liste yazsaydık, backend'e yeni bir Action
+            // eklendiğinde (örneğin dün eklediğimiz
+            // "yorum_gizlendi") filtre listesini güncellemek
+            // unutulurdu ve o işlem tipi hiç filtrelenemezdi.
+            //
+            // Veritabanından okuyunca liste kendiliğinden büyüyor.
+            // Bedeli tek bir DISTINCT sorgusu.
+            //
+            // ⚠️ Bu sorgu FİLTRELERDEN BAĞIMSIZ (sorgu değişkenini
+            // kullanmıyor). Sebep: kullanıcı "rol_degisti" filtresi
+            // uygulamışken açılır menüde sadece o seçenek kalsaydı
+            // başka bir tipe geçemezdi — kendi kendini kilitleyen
+            // bir filtre olurdu.
+            var islemTipleri = await _context.AuditLogs
+                .Select(l => l.Action)
+                .Distinct()
+                .OrderBy(a => a)
+                .ToListAsync();
+
+            return Ok(new
+            {
+                loglar,
+                toplam,
+                sayfa = page,
+                sayfaBoyutu = pageSize,
+                toplamSayfa = (int)Math.Ceiling(toplam / (double)pageSize),
+
+                // Dönemi geri gönderiyoruz — kullanıcı tarih
+                // seçmediyse hangi aralığı gördüğünü bilmeli.
+                baslangic = aralik.BaslangicYerel.ToString("yyyy-MM-dd"),
+                bitis = aralik.BitisYerel.ToString("yyyy-MM-dd"),
+
+                islemTipleri
+            });
+        }
+
+
+
         // 🔴 GET /api/admin/dikkat-gerektirenler?gunEsigi=3
         //
         // Adminin "acilen bakmam gereken ne var?" sorusuna cevap.

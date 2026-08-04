@@ -58,6 +58,15 @@ builder.Services.AddScoped<ETicaretAPI.Services.IEmailGonderici, ETicaretAPI.Ser
 // ve ileride veritabanı erişimi eklemek gerekirse hazır olması için.
 builder.Services.AddScoped<ETicaretAPI.Services.EmailSablonlari>();
 
+// ⭐ YENİ — rapor tarih aralığı hesaplayıcısı.
+//
+// Neden AddScoped? Diğer servislerle aynı ömür — istek başına bir
+// örnek. Aslında bu sınıf durum tutmadığı için Singleton da olabilirdi
+// (bir kez üretilip hep kullanılırdı), ama projedeki desenden sapmamak
+// okunabilirlik açısından daha değerli. Tek bir nesnenin ömrü için
+// istisna kuralı yazmaya değmez.
+builder.Services.AddScoped<ETicaretAPI.Services.RaporTarihi>();
+
 
 
 // ⭐ YENİ — dış URL'lerden resim indirebilmek için HttpClient fabrikası

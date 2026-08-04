@@ -67,6 +67,32 @@ namespace ETicaretAPI.Data
                 .Property(oi => oi.UnitPrice)
                 .HasPrecision(18, 2);
 
+            // ⭐ YENİ — dondurulmuş maliyet de bir para alanı.
+            //
+            // Neden precision belirtmek zorundayız?
+            // SQL Server'da decimal'in varsayılanı decimal(18,0) —
+            // yani KURUŞ YOK. 12,50 TL veritabanına 13 olarak yazılırdı
+            // ve bunu hiçbir hata mesajı söylemezdi.
+            // Diğer tüm para alanlarında (Price, Total, UnitPrice, Cost)
+            // aynı ayarı yaptık; bu onların devamı.
+            modelBuilder.Entity<OrderItem>()
+                .Property(oi => oi.UnitCost)
+                .HasPrecision(18, 2);
+
+            // ⭐ YENİ — dondurulmuş ürün adına uzunluk sınırı.
+            //
+            // Sınır koymazsak EF bu kolonu nvarchar(max) yapar.
+            // nvarchar(max) SQL Server'da "büyük nesne" sayılır: satırın
+            // dışında ayrı sayfalarda saklanabilir, index kurulamaz ve
+            // her okumada ek maliyet getirir. Ürün adı için gereksiz.
+            //
+            // 200 seçildi çünkü gerçekçi bir üst sınır. Backfill
+            // sırasında LEFT(Name, 200) kullanacağız — böylece daha uzun
+            // bir ad varsa migration hata vermek yerine kırpar.
+            modelBuilder.Entity<OrderItem>()
+                .Property(oi => oi.ProductName)
+                .HasMaxLength(200);
+
             modelBuilder.Entity<Payment>()
                 .Property(p => p.Amount)
                 .HasPrecision(18, 2);

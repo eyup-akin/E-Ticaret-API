@@ -342,12 +342,38 @@ namespace ETicaretAPI.Controllers
                     //
                     // Kural: ExecuteUpdate ile yazdığın kolona bellekte dokunma.
 
-                    // Sipariş detayı oluştur — FİYATI DONDUR (o anki fiyat)
+                    // Sipariş detayı oluştur — ÜÇ ALANI BİRDEN DONDUR
+                    //
+                    // ⭐ Buradaki "urun" nesnesi yukarıda FindAsync ile
+                    // çekildi. O sırada okunan değerler kalemin içine
+                    // KOPYALANIYOR; bu noktadan sonra Products tablosunda
+                    // ne olursa olsun bu satır değişmez.
+                    //
+                    // Neden üçü birlikte? Yarı donmuş kayıt en kötüsüdür:
+                    // fiyat 3 ay önceki, ad bugünkü olursa hangi bilginin
+                    // güvenilir olduğu belli olmaz.
                     siparisDetaylari.Add(new OrderItem
                     {
                         ProductId = urun.Id,
                         Quantity = adet,
-                        UnitPrice = urun.Price // o anki fiyat sabitlenir
+
+                        // Satış fiyatı — müşterinin ödediği tutar
+                        UnitPrice = urun.Price,
+
+                        // ⭐ YENİ — ürün adı.
+                        // Ürün sonradan silinse veya adı değişse bile
+                        // müşteri neyi sipariş ettiğini görebilsin.
+                        ProductName = urun.Name,
+
+                        // ⭐ YENİ — o anki maliyet.
+                        // urun.Cost nullable (decimal?), UnitCost de
+                        // nullable — maliyeti girilmemiş üründe null
+                        // yazılır, dönüşüm gerekmez.
+                        //
+                        // Bu satır kâr raporunun temelidir: rapor
+                        // Products tablosuna HİÇ bakmayacak, sadece
+                        // buradaki donmuş değeri kullanacak.
+                        UnitCost = urun.Cost
                     });
 
                     toplamTutar += urun.Price * adet;

@@ -14,10 +14,13 @@ namespace ETicaretAPI.Controllers
     public class CartController : ControllerBase
     {
         private readonly AppDbContext _context;
+        // ⭐ YENİ — ayarlardan geliyor, artık koda gömülü değil.
+        private readonly ETicaretAPI.Services.MagazaAyarlari _ayarlar;
 
-        public CartController(AppDbContext context)
+        public CartController(AppDbContext context, ETicaretAPI.Services.MagazaAyarlari ayarlar)
         {
             _context = context;
+            _ayarlar = ayarlar;
         }
 
         // Token'dan giriş yapmış kullanıcının id'sini okur
@@ -63,7 +66,7 @@ namespace ETicaretAPI.Controllers
         // Neden sabit? Üç yerde aynı sayı geçiyor: CartAddDto'daki Range,
         // mobildeki adet seçici ve aşağıdaki kırpma. Sihirli sayıyı koda
         // gömmek yerine isim vermek, değiştirmek gerektiğinde tek yer arattırır.
-        private const int SepetMaksAdet = 99;
+        
 
         // 🟡 POST /api/cart — sepete ekle
         //
@@ -184,10 +187,10 @@ namespace ETicaretAPI.Controllers
             await _context.CartItems
                 .Where(c => c.UserId == userId
                          && c.ProductId == dto.ProductId
-                         && c.Quantity > SepetMaksAdet)
+                         && c.Quantity > _ayarlar.SepetMaksAdet)
                 .ExecuteUpdateAsync(s => s.SetProperty(
                     c => c.Quantity,
-                    c => SepetMaksAdet));
+                    c => _ayarlar.SepetMaksAdet));
 
             return Ok(new { mesaj = "Ürün sepete eklendi biladerim!" });
         }

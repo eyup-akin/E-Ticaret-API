@@ -37,11 +37,15 @@ namespace ETicaretAPI.Controllers
     public class ReportsController : ControllerBase
     {
         private readonly AppDbContext _context;
+
+        // ⭐ YENİ — ayarlardan geliyor, artık koda gömülü değil.
+        private readonly ETicaretAPI.Services.MagazaAyarlari _ayarlar;
         private readonly RaporTarihi _tarih;
 
-        public ReportsController(AppDbContext context, RaporTarihi tarih)
+        public ReportsController(AppDbContext context, ETicaretAPI.Services.MagazaAyarlari ayarlar, RaporTarihi tarih)
         {
             _context = context;
+            _ayarlar = ayarlar;
             _tarih = tarih;
         }
 
@@ -376,19 +380,27 @@ namespace ETicaretAPI.Controllers
         //  gönderen ön yüzü yanıltır.
         // ============================================================
         [HttpGet("kritik-stok")]
-        public async Task<IActionResult> KritikStok([FromQuery] int esik = 5)
+        // ⚠️ VARSAYILAN ARTIK -1.
+        //
+        // Neden 5 değil? Çünkü "5" iki anlama gelebiliyordu:
+        // "kullanıcı 5 istedi" veya "kullanıcı bir şey istemedi".
+        // İkisini ayırt edemiyorduk.
+        //
+        // -1 geçersiz bir eşik olduğu için "istek yok" demenin
+        // net yolu. O durumda mağaza ayarındaki eşiği kullanıyoruz
+        // — yani rapor, dashboard ve ürün listesi AYNI sayıyı
+        // görüyor.
+        public async Task<IActionResult> KritikStok([FromQuery] int esik = -1)
         {
-            // Kullanıcı 0 veya negatif gönderirse rapor anlamsızlaşır.
-            // Üst sınır da koyuyoruz: 1000 verilirse tüm katalog döner
-            // ve bu bir "kritik stok" raporu olmaktan çıkar.
+            // İstek gelmediyse mağaza ayarına düş
+            if (esik < 0)
+            {
+                esik = _ayarlar.StokAzEsigi;
+            }
+
             if (esik < 1)
             {
                 esik = 1;
-            }
-
-            if (esik > 100)
-            {
-                esik = 100;
             }
 
             var urunler = await _context.Products

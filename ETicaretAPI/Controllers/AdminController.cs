@@ -25,19 +25,23 @@ namespace ETicaretAPI.Controllers
         private readonly ETicaretAPI.Services.IEmailGonderici _email;
         private readonly ETicaretAPI.Services.EmailSablonlari _sablonlar;
         private readonly ILogger<AdminController> _log;
+        // ⭐ YENİ — ayarlardan geliyor, artık koda gömülü değil.
+        private readonly ETicaretAPI.Services.MagazaAyarlari _ayarlar;
 
         public AdminController(
             AppDbContext context,
             ETicaretAPI.Services.RaporTarihi tarih,
             ETicaretAPI.Services.IEmailGonderici email,          // ⭐ YENİ
             ETicaretAPI.Services.EmailSablonlari sablonlar,      // ⭐ YENİ
-            ILogger<AdminController> log)                        // ⭐ YENİ
+            ILogger<AdminController> log,                        // ⭐ YENİ
+            ETicaretAPI.Services.MagazaAyarlari ayarlar)         // ⭐ YENİ
         {
             _context = context;
             _tarih = tarih;
             _email = email;                                       // ⭐ YENİ
             _sablonlar = sablonlar;                               // ⭐ YENİ
             _log = log;                                           // ⭐ YENİ
+            _ayarlar = ayarlar;                                   // ⭐ YENİ
         }
 
         // 🔴 GET /api/admin/users
@@ -413,7 +417,7 @@ namespace ETicaretAPI.Controllers
 
             // ---------- 4) KRİTİK STOK (5'ten az) ----------
             var kritikStok = await _context.Products
-                .Where(p => p.Stock < 5)
+                .Where(p => p.Stock < _ayarlar.StokAzEsigi)
                 .OrderBy(p => p.Stock)
                 .Take(10)
                 .Select(p => new
@@ -690,7 +694,7 @@ namespace ETicaretAPI.Controllers
 
             // ---------- 2) KRİTİK STOK ----------
             var kritikStok = await _context.Products
-                .Where(p => p.Stock < 5)
+                .Where(p => p.Stock < _ayarlar.StokAzEsigi)
                 .OrderBy(p => p.Stock)                // en azı en üstte
                 .Join(_context.Categories,
                       p => p.CategoryId,

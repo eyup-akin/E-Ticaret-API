@@ -71,6 +71,22 @@ builder.Services.AddScoped<ETicaretAPI.Services.RaporTarihi>();
 // ⭐ YENİ — stok hareket defteri yazıcısı
 builder.Services.AddScoped<ETicaretAPI.Services.StokDefteri>();
 
+// ⭐ YENİ — mağaza ayarları.
+//
+// NEDEN Singleton, Scoped DEĞİL?
+//
+// Bu sınıfın DURUMU YOK — sadece IConfiguration'a bakıp değer
+// döndürüyor. Her istek için yeni bir örnek üretmenin hiçbir
+// faydası olmaz, sadece boşuna nesne oluşur.
+//
+// Kural: bağımlılıkları da singleton olabilen, durumsuz servisler
+// singleton olur. IConfiguration zaten singleton, uyumlu.
+//
+// ⚠️ Karşılaştır: StokDefteri Scoped, çünkü AppDbContext alıyor
+// ve DbContext isteğe özeldir. Bir singleton'ın DbContext alması
+// ciddi bir hata olurdu (aynı context'i tüm isteklerde paylaşmak).
+builder.Services.AddSingleton<ETicaretAPI.Services.MagazaAyarlari>();
+
 
 // ⭐ YENİ — dış URL'lerden resim indirebilmek için HttpClient fabrikası
 builder.Services.AddHttpClient();

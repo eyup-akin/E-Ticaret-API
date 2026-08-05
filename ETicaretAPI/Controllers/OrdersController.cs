@@ -19,6 +19,8 @@ namespace ETicaretAPI.Controllers
         private readonly AppDbContext _context;
         private readonly IConfiguration _config;
         private readonly KuponServisi _kuponServisi;     // ⭐
+        // ⭐ YENİ — ayarlardan geliyor, artık koda gömülü değil.
+        private readonly ETicaretAPI.Services.MagazaAyarlari _ayarlar;
 
         // ⭐ YENİ — e-posta bildirimleri için üç bağımlılık
         //
@@ -45,7 +47,8 @@ namespace ETicaretAPI.Controllers
             IEmailGonderici email,                        // ⭐ YENİ
             EmailSablonlari sablonlar,                    // ⭐ YENİ
             StokDefteri defter,
-            ILogger<OrdersController> log)                // ⭐ YENİ
+            ILogger<OrdersController> log,
+            ETicaretAPI.Services.MagazaAyarlari ayarlar)  // ⭐ YENİ 
 
         {
             _context = context;
@@ -55,6 +58,7 @@ namespace ETicaretAPI.Controllers
             _sablonlar = sablonlar;
             _log = log;
             _defter = defter;
+            _ayarlar = ayarlar;
         }
 
         private int GetUserId()
@@ -139,7 +143,14 @@ namespace ETicaretAPI.Controllers
             {
                 var tarih = DateTime.UtcNow.ToString("yyMMdd");
                 var rastgele = Random.Shared.Next(0, 10000).ToString("D4");
-                var aday = $"SP-{tarih}-{rastgele}";
+                // ⭐ DEĞİŞTİ — önek artık ayardan.
+                //
+                // ⚠️ Bu değeri sonradan değiştirirsen eski siparişler
+                // eski önekle KALIR — ve bu doğru davranış. Sipariş
+                // numarası dondurulmuş veridir; geçmişe dönüp
+                // değiştirmek, müşterinin elindeki fişle sistemdeki
+                // kaydı uyuşmaz hale getirirdi.
+                var aday = $"{_ayarlar.SiparisNoOneki}-{tarih}-{rastgele}";
 
                 var kullanilmisMi = await _context.Orders
                     .AnyAsync(o => o.OrderNumber == aday);

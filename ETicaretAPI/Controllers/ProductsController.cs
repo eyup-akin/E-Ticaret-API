@@ -410,6 +410,13 @@ namespace ETicaretAPI.Controllers
                 IsActive = product.IsActive,                  // ⭐ YENİ
                 // Maliyet sadece admin isteğinde dolsun, değilse null kalsın
                 Cost = adminMi ? product.Cost : null
+                ,
+
+                // ⭐ YENİ — açıklama SADECE burada dolduruluyor.
+                //
+                // GetProducts (liste ucu) bu alanı bilerek atlıyor;
+                // orada null gidiyor ve mobil de zaten kullanmıyor.
+                Description = product.Description
             };
 
             await ResimleriDoldur(new List<ProductDto> { dto });
@@ -625,6 +632,17 @@ namespace ETicaretAPI.Controllers
                 Stock = dto.Stock,
                 CategoryId = dto.CategoryId,
                 IsActive = dto.IsActive      // DTO varsayılanı true
+
+                ,
+
+                // ⭐ YENİ — boşsa null yazıyoruz, boş string değil.
+                // Projede "değer yok" durumunun TEK temsili NULL.
+                // İleride "açıklaması olmayan ürünler" filtresi
+                // yazarsak boş string'ler o listeye düşmesin.
+                Description = string.IsNullOrWhiteSpace(dto.Description)
+                    ? null
+                    : dto.Description.Trim()
+
             };
 
             // ⭐ YENİ — TRANSACTION
@@ -719,6 +737,11 @@ namespace ETicaretAPI.Controllers
             product.Stock = dto.Stock;
             product.CategoryId = dto.CategoryId;
             product.IsActive = dto.IsActive;
+
+            // ⭐ YENİ — açıklama
+            product.Description = string.IsNullOrWhiteSpace(dto.Description)
+                ? null
+                : dto.Description.Trim();
 
             // ⭐ YENİ — DEFTERE FARK KAYDI
             //

@@ -37,6 +37,19 @@
         // Asıl tüketicisi admin paneli: listede rozet, formda anahtar.
         public bool IsActive { get; set; }
 
+        // ⭐ YENİ — ürün açıklaması.
+        //
+        // ⚠️ SADECE DETAY UCUNDA DOLAR, liste ucunda null kalır.
+        //
+        // Neden? "Liste ucu ÖZET, detay ucu TAM veri döndürür."
+        // 2000 karakterlik bir metin, 50 ürünlük bir listede 100 KB
+        // gereksiz veri demek. Mobil kullanıcı ana sayfada bu metnin
+        // hiçbirini görmüyor — ama mobil veriyle indiriyor.
+        //
+        // Cost alanındaki desenin akrabası: orada güvenlik gerekçesiyle
+        // kısıtlıyorduk, burada performans gerekçesiyle.
+        public string? Description { get; set; }
+
 
         public int FavoriteCount { get; set; }
     }

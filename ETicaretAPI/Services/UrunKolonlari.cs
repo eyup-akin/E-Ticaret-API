@@ -79,6 +79,17 @@
             },
             new UrunKolonu
             {
+                BaslikAdi = "Açıklama",
+                KabulEdilenAdlar = new[]
+                {
+                    "aciklama", "açıklama", "detay", "description"
+                },
+                Zorunlu = false,
+                Aciklama = "Ürün açıklaması (isteğe bağlı). En fazla 2000 karakter.",
+                OrnekDeger = "%100 pamuk, çift dikişli, 30 derecede yıkanabilir."
+            },
+            new UrunKolonu
+            {
                 BaslikAdi = "Resim",
                 KabulEdilenAdlar = new[]
                 {

@@ -104,6 +104,9 @@ namespace ETicaretAPI.Services
                 var kategoriSutun = KolonBul("Kategori");
                 var maliyetSutun = KolonBul("Maliyet");
                 var stokSutun = KolonBul("Stok");
+
+                var aciklamaSutun = KolonBul("Açıklama");   // ⭐ YENİ
+
                 var resimSutun = KolonBul("Resim");
 
                 // 2) Zorunlu sütunlar var mı?
@@ -206,6 +209,30 @@ namespace ETicaretAPI.Services
                         stok = IntOku(satir.Cell(stokSutun.Value));
                     }
 
+                    // ⭐ YENİ — açıklama (isteğe bağlı)
+                    //
+                    // Excel'den gelen metin 2000 karakteri aşabilir.
+                    // Veritabanı sınırı aşan değeri kabul etmez ve
+                    // istisna fırlatır — bu, o satırın değil TÜM işin
+                    // patlaması demektir (catch bloğu işi "Hata"ya
+                    // çeviriyor).
+                    //
+                    // Kural: içe aktarmada tek bir kötü satır tüm
+                    // dosyayı düşürmemeli. Kesip devam ediyoruz.
+                    string? aciklama = null;
+
+                    if (aciklamaSutun != null)
+                    {
+                        var ham = satir.Cell(aciklamaSutun.Value).GetString().Trim();
+
+                        if (!string.IsNullOrEmpty(ham))
+                        {
+                            aciklama = ham.Length > 2000
+                                ? ham.Substring(0, 2000)
+                                : ham;
+                        }
+                    }
+
                     // --- Kategori: yoksa oluştur ---
                     var kategoriAnahtar = kategoriAdi.ToLower();
                     int kategoriId;
@@ -223,6 +250,7 @@ namespace ETicaretAPI.Services
                         kategoriId = yeniKategori.Id;
                     }
 
+
                     // --- Ürünü oluştur ---
                     var urun = new Product
                     {
@@ -231,7 +259,9 @@ namespace ETicaretAPI.Services
                         Price = fiyat,
                         Cost = maliyet,
                         Stock = stok,
-                        CategoryId = kategoriId
+                        CategoryId = kategoriId,
+                        
+                        Description = aciklama   // ⭐ YENİ
                     };
 
                     _context.Products.Add(urun);

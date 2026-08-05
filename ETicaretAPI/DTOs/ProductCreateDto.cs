@@ -39,5 +39,16 @@ namespace ETicaretAPI.DTOs
         // düşerdi. true yazarak "bilgi gelmediyse ürün satıştadır" demiş
         // oluyoruz — geriye dönük uyumluluk.
         public bool IsActive { get; set; } = true;
+
+        // ⭐ YENİ — ürün açıklaması (isteğe bağlı).
+        //
+        // [Required] yok: açıklamasız ürün geçerlidir.
+        //
+        // [MaxLength(2000)] AppDbContext'teki HasMaxLength(2000) ile
+        // aynı sayı. Doğrulama burada yapılınca kullanıcı anlaşılır
+        // bir hata mesajı alır; sadece veritabanına bıraksaydık
+        // ham bir SQL istisnası patlardı.
+        [MaxLength(2000, ErrorMessage = "Açıklama en fazla 2000 karakter olabilir!")]
+        public string? Description { get; set; }
     }
 }

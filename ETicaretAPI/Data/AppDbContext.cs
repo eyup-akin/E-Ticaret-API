@@ -148,6 +148,25 @@ namespace ETicaretAPI.Data
                 .HasMaxLength(64);
 
 
+            // ⭐ YENİ — ürün açıklaması uzunluk sınırı.
+            //
+            // Belirtmeseydik EF bu kolonu nvarchar(max) yapardı.
+            // İki sorunu var:
+            //   1) Sınırsız metin veritabanını şişirir
+            //   2) nvarchar(max) kolonuna index kurulamaz — Aşama 6'da
+            //      açıklamada arama yapacağız, o zaman gerekebilir
+            //
+            // 2000 karakter: bir ürün açıklaması için fazlasıyla yeterli,
+            // roman yazılmasını da engelliyor.
+            //
+            // ⚠️ Bu sayı ProductCreateDto'daki [MaxLength(2000)] ile
+            // AYNI olmalı. Farklı olsalardı ya DTO gereksiz yere
+            // reddederdi ya da veritabanı istisna fırlatırdı.
+            modelBuilder.Entity<Product>()
+                .Property(p => p.Description)
+                .HasMaxLength(2000);
+
+
             // ⭐ YENİ — barkod benzersiz olsun (aynı barkod iki üründe olamaz).
             // Barcode nullable olduğu için EF, SQL Server'da bu index'e
             // otomatik "WHERE [Barcode] IS NOT NULL" filtresi ekler.

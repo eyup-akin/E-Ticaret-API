@@ -35,5 +35,25 @@
         // (Eski satırların doldurulması migration'da ayrıca halledilecek —
         //  C# tarafındaki bu atama veritabanına yansımaz.)
         public bool IsActive { get; set; } = true;
-    }
+
+        // ⭐ YENİ — ÜRÜN AÇIKLAMASI
+        //
+        // Beden, malzeme, garanti, kutu içeriği, kullanım bilgisi...
+        // Mesafeli satış mevzuatında "malın temel nitelikleri" olarak
+        // zorunlu tutulan bilgi.
+        //
+        // Neden nullable?
+        // Mevcut ürünlerde boş kalacak, admin zamanla dolduracak.
+        // Zorunlu yapsaydık migration'ın var olan tüm ürünlere bir
+        // şey yazması gerekirdi — ya uydurma metin ya boş string.
+        // "Boş bırakmak, uydurmaktan iyidir."
+        //
+        // ⚠️ NEDEN OrderItem'A DONDURULMUYOR?
+        // Fiyatı ve ürün adını dondurduk çünkü onlar SÖZLEŞMENİN
+        // parçası: "şu üründen şu fiyata aldım." Açıklama ise bir
+        // pazarlama metnidir; sonradan değişmesi geçmiş siparişi
+        // geçersiz kılmaz. Mesafeli satış sözleşmesinin kendisi
+        // Aşama 10'da ayrıca saklanacak.
+        public string? Description { get; set; }
+    }   
 }

@@ -6,6 +6,9 @@ using ETicaretAPI.Models;
 using ETicaretAPI.DTOs;
 using System.Net;          // ⭐ YENİ — IPAddress, Dns
 using System.Net.Sockets;  // ⭐ YENİ — AddressFamily
+using System.Security.Claims;   // ⭐ YENİ — token'dan kullanıcı id'si okumak için
+using ETicaretAPI.Services;     // ⭐ YENİ — StokDefteri buradan geliyor
+
 
 namespace ETicaretAPI.Controllers
 {
@@ -17,6 +20,16 @@ namespace ETicaretAPI.Controllers
         private readonly IWebHostEnvironment _env; // wwwroot'un yerini bilir
         private readonly IHttpClientFactory _httpFactory; // ⭐ URL'den resim indirmek için
 
+
+        // ⭐ YENİ — Stok defteri servisi.
+        //
+        // Neden enjekte ediyoruz da "new StokDefteri(_context)" demiyoruz?
+        // Çünkü servis Program.cs'te Scoped kayıtlı ve BİZİMLE AYNI
+        // DbContext örneğini alıyor. Elle new'leseydik bile aynı context'i
+        // vermemiz gerekirdi — DI bunu bizim yerimize, hatasız yapıyor.
+        private readonly StokDefteri _defter;
+
+
         // Resim yükleme kuralları — tek yerde dursun
         private const long MaxDosyaBoyutu = 5 * 1024 * 1024; // 5 MB
         private static readonly string[] IzinliUzantilar = { ".jpg", ".jpeg", ".png", ".webp" };
@@ -25,13 +38,15 @@ namespace ETicaretAPI.Controllers
         public ProductsController(
             AppDbContext context,
             IWebHostEnvironment env,
-            IHttpClientFactory httpFactory)
+            IHttpClientFactory httpFactory,
+            StokDefteri defter)              // ⭐ YENİ
         {
             _context = context;
             _env = env;
             _httpFactory = httpFactory;
+            _defter = defter;                // ⭐ YENİ
         }
-
+            
         // ==========================================================
         //  YARDIMCILAR
         // ==========================================================
@@ -84,6 +99,34 @@ namespace ETicaretAPI.Controllers
             }
         }
 
+
+        // ⭐ YENİ — İSTEĞİ YAPAN KULLANICININ ID'Sİ
+        //
+        // Neden token'dan okuyoruz da istekten almıyoruz?
+        // "Kimlik istekten değil token'dan okunur." İstemci gövdeye
+        // istediği id'yi yazabilir; token imzalı, oynanamaz.
+        //
+        // Neden int? (nullable) döndürüyor?
+        // StockMovement.KullaniciId zaten nullable — sistem işlerinin
+        // (Hangfire) bir "yapan"ı yok. Bu uçlar [Authorize] altında
+        // olduğu için pratikte hiç null gelmeyecek, ama null dönmek
+        // çökmekten iyidir: defter kaydı "yapan bilinmiyor" diye
+        // yazılır, istek başarısız olmaz.
+        //
+        // (OrdersController'daki GetUserId() int döndürüyor çünkü orada
+        //  kullanıcı id'si iş mantığının zorunlu parçası — sahiplik
+        //  kontrolünde kullanılıyor. Burada sadece bilgi amaçlı.)
+        private int? GetUserId()
+        {
+            var talep = User.FindFirst(ClaimTypes.NameIdentifier);
+
+            if (talep != null && int.TryParse(talep.Value, out var id))
+            {
+                return id;
+            }
+
+            return null;
+        }
 
         // Verilen ürün listesine puan özetini doldurur (tek sorguda — N+1 yok)
         private async Task PuanlariDoldur(List<ProductDto> urunler)
@@ -400,15 +443,60 @@ namespace ETicaretAPI.Controllers
                 Cost = dto.Cost,
                 Stock = dto.Stock,
                 CategoryId = dto.CategoryId,
-                IsActive = dto.IsActive      // ⭐ YENİ — DTO varsayılanı true
+                IsActive = dto.IsActive      // DTO varsayılanı true
             };
 
+            // ⭐ YENİ — TRANSACTION
+            //
+            // Neden burada transaction var da UpdateProduct'ta yok?
+            // Çünkü burada İKİ ayrı SaveChanges var ve bunlar zorunlu:
+            //   1) Ürünü yaz  → ancak o zaman product.Id oluşur
+            //   2) Hareketi yaz → ProductId olarak o Id'yi kullanır
+            //
+            // Araya bir hata girerse "ürün var ama defter kaydı yok"
+            // durumu oluşur ve tam da engellemeye çalıştığımız şey olur:
+            // bakiye ile defter arasındaki fark DEĞİŞİR.
+            //
+            // try/catch yazmıyoruz: 'using' sayesinde Commit'e ulaşılmadan
+            // metottan çıkılırsa transaction otomatik geri alınır (rollback).
+            using var transaction = await _context.Database.BeginTransactionAsync();
+
             _context.Products.Add(product);
-            await _context.SaveChangesAsync();
+            await _context.SaveChangesAsync();   // 1. yazma → product.Id artık dolu
+
+            // ⭐ YENİ — DEFTERE BAŞLANGIÇ STOĞU KAYDI
+            //
+            // oncekiStok = 0 çünkü ürün bu satırdan önce hiç yoktu.
+            // miktar da doğrudan dto.Stock: fark = yeni(50) - eski(0) = 50.
+            //
+            // Sebep neden "manuel"? Çünkü bu hareketi bir admin, elle,
+            // panelden yaptı. "excel" toplu içe aktarma için ayrılmış.
+            //
+            // Referans alanları null: bu hareket bir siparişten veya içe
+            // aktarma işinden doğmadı, doğrudan insan kararı.
+            //
+            // ⚠️ Stok 0 girilirse Ekle() hiç kayıt yazmaz (miktar == 0
+            //    kontrolü servisin içinde) — ve bu doğru davranış:
+            //    "0'dan 0'a" bir hareket değildir, defteri gürültüyle
+            //    doldurmanın anlamı yok.
+            _defter.Ekle(
+                urunId: product.Id,
+                miktar: product.Stock,
+                oncekiStok: 0,
+                sebep: StokSebep.Manuel,
+                kullaniciId: GetUserId(),
+                referansTipi: null,
+                referansId: null,
+                aciklama: "Ürün oluşturuldu");
+
+            await _context.SaveChangesAsync();   // 2. yazma → stok hareketi
+            await transaction.CommitAsync();     // ikisi birlikte kesinleşti
 
             // id'yi döndürüyoruz — panel bunu alıp hemen resim yükleyecek
             return Ok(new { mesaj = "Ürün eklendi biladerim!", id = product.Id });
         }
+
+
 
         // 🔴 PUT /api/products/5
         [Authorize(Roles = "admin")]
@@ -432,18 +520,57 @@ namespace ETicaretAPI.Controllers
                 return BadRequest(new { mesaj = "Bu barkod zaten başka bir üründe kayıtlı!" });
             }
 
+            // ⭐ YENİ — ESKİ STOĞU, ÜZERİNE YAZILMADAN ÖNCE YAKALA
+            //
+            // ⚠️ Bu satırın YERİ kritik. Bir alt bloktaki
+            //    "product.Stock = dto.Stock" satırı çalıştığı anda eski
+            //    değer bellekten kaybolur. Deftere hem "önceki stok" hem
+            //    de "fark" yazacağımız için ikisine de ihtiyacımız var.
+            //
+            //    Sonradan okusaydık miktar hep 0 çıkardı ve Ekle() hiçbir
+            //    kayıt yazmazdı — patlamayan, sessiz bir hata. En kötüsü.
+            var eskiStok = product.Stock;
+
             product.Name = dto.Name;
             product.Barcode = barkod;
             product.Price = dto.Price;
             product.Cost = dto.Cost;
             product.Stock = dto.Stock;
             product.CategoryId = dto.CategoryId;
-            product.IsActive = dto.IsActive;      // ⭐ YENİ
+            product.IsActive = dto.IsActive;
 
+            // ⭐ YENİ — DEFTERE FARK KAYDI
+            //
+            // miktar İŞARETLİ bir sayı:
+            //   stok 12 → 50 ise  miktar = +38  (giriş)
+            //   stok 50 → 12 ise  miktar = −38  (çıkış)
+            // Ayrı bir "yon" kolonu yok; toplam almak tek SUM ile bitsin diye.
+            //
+            // Admin stoğa hiç dokunmadıysa miktar 0 olur ve Ekle() hiçbir
+            // şey yazmaz. Yani her "Kaydet" tıklamasında deftere çöp
+            // birikmiyor — sadece gerçek değişiklikler kaydediliyor.
+            _defter.Ekle(
+                urunId: product.Id,
+                miktar: dto.Stock - eskiStok,
+                oncekiStok: eskiStok,
+                sebep: StokSebep.Manuel,
+                kullaniciId: GetUserId(),
+                referansTipi: null,
+                referansId: null,
+                aciklama: "Ürün formundan güncellendi");
+
+            // ⭐ TEK SaveChanges — ve bu yeterli.
+            //
+            // Ürünün güncellenmesi ile stok hareketinin eklenmesi aynı
+            // context'te bekliyor. SaveChanges kendi içinde bir transaction
+            // açıp ikisini birlikte yazar: ya ikisi de olur, ya hiçbiri.
+            // Bu yüzden burada AYRICA transaction açmak gereksiz kod olurdu.
             await _context.SaveChangesAsync();
 
             return Ok(new { mesaj = "Ürün güncellendi biladerim!", id = product.Id });
         }
+
+
 
 
         // 🔴 PUT /api/products/5/durum — satışa aç / satıştan kaldır

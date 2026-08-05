@@ -20,18 +20,28 @@ namespace ETicaretAPI.Services
         // ⭐ YENİ — wwwroot'un diskteki yerini bilmek için (resmi oraya yazacağız).
         private readonly IWebHostEnvironment _env;
 
+        // ⭐ YENİ — Stok defteri servisi.
+        //
+        // Bu sınıf Hangfire tarafından ARKA PLANDA çalıştırılıyor.
+        // Hangfire her iş için kendi scope'unu açar ve o scope'ta hem
+        // AppDbContext'i hem StokDefteri'ni taze üretir — ikisi aynı
+        // context'i paylaşır, bizim ekstra bir şey yapmamıza gerek yok.
+        private readonly StokDefteri _defter;
+
         // ⭐ YENİ — resim kuralları, tek yerde dursun (ProductsController ile aynı sınırlar).
         private const long MaxResimBoyutu = 5 * 1024 * 1024; // 5 MB
         private const int MaxResimSayisi = 8;                // bir ürüne en fazla 8 resim
 
         public IceAktarmaServisi(
             AppDbContext context,
-            IHttpClientFactory httpFactory,   // ⭐ YENİ
-            IWebHostEnvironment env)          // ⭐ YENİ
+            IHttpClientFactory httpFactory,
+            IWebHostEnvironment env,
+            StokDefteri defter)               // ⭐ YENİ
         {
             _context = context;
             _httpFactory = httpFactory;
             _env = env;
+            _defter = defter;                 // ⭐ YENİ
         }
 
         // Hangfire bunu arka planda çağırır.
@@ -226,6 +236,35 @@ namespace ETicaretAPI.Services
 
                     _context.Products.Add(urun);
                     await _context.SaveChangesAsync(); // ⭐ artık urun.Id dolu — resimler buna bağlanacak
+
+
+                    // ⭐ YENİ — DEFTERE EXCEL GİRİŞİ KAYDI
+                    //
+                    // Neden burada "Ekle" kullanabiliyoruz (siparişteki gibi
+                    // "Olustur" değil)? Çünkü referans Id'si BAŞTAN belli:
+                    // jobId bu metoda parametre olarak geliyor, ImportJob kaydı
+                    // zaten diskte. Siparişteki sıralama problemi burada yok.
+                    //
+                    // kullaniciId = job.CreatedByUserId:
+                    // Excel'i yükleyen admin belli, "sistem yaptı" demek yerine
+                    // gerçek sorumluyu yazıyoruz. Alan zaten nullable, boşsa da
+                    // sorun çıkmaz.
+                    //
+                    // ⚠️ Ayrıca SaveChanges ÇAĞIRMIYORUZ. Döngünün sonundaki
+                    //    "job.Success++; await SaveChangesAsync();" satırı bunu da
+                    //    diske yazacak. Hareket nesnesi şu an TAM (ProductId ve
+                    //    ReferansId dolu), yani yarım veri diske düşme riski yok —
+                    //    siparişte yaşadığımız sorunun tersi durum.
+                    _defter.Ekle(
+                        urunId: urun.Id,
+                        miktar: stok,
+                        oncekiStok: 0,
+                        sebep: StokSebep.Excel,
+                        kullaniciId: job.CreatedByUserId,
+                        referansTipi: "ImportJob",
+                        referansId: jobId,
+                        aciklama: null);
+
 
                     // ⭐ YENİ — RESİMLERİ İNDİR
                     //    Resim sütunu varsa ve hücre boş değilse, içindeki linkleri indirmeyi dener.

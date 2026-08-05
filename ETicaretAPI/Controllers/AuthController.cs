@@ -1130,7 +1130,26 @@ namespace ETicaretAPI.Controllers
         // Reddedilen kişi ne kadar bekleyecek?
         // Sabit olarak duruyor: "30" sayısını koda serpiştirseydik
         // yarın 60 yapmak istediğimizde birini atlardık.
-        private const int RedSonrasiBeklemeGunu = 30;
+        //private const int RedSonrasiBeklemeGunu = 30;
+
+        // ⭐ DEĞİŞTİ — bekleme süresi artık ayardan geliyor.
+        //
+        // Neden const değil property?
+        // const derleme zamanında sabitlenir; ayar ise çalışma
+        // zamanında okunur. İkisi bir arada olamaz.
+        //
+        // Neden => (ifade gövdeli özellik)?
+        // Her okunduğunda config'e bakıyor. Bir kez okuyup alanda
+        // saklasaydık, appsettings çalışırken değiştirildiğinde
+        // (ASP.NET bunu destekler) eski değer kullanılmaya devam
+        // ederdi.
+        //
+        // GetValue<int> yerine ?? 3:
+        // Ayar hiç yoksa veya bozuksa sistem çökmemeli, makul bir
+        // varsayılana düşmeli. "Yapılandırma eksikse çalışma" değil,
+        // "yapılandırma eksikse güvenli varsayılanla çalış."
+        private int RedSonrasiBeklemeSaati =>
+            _config.GetValue<int?>("Basvuru:RedSonrasiBeklemeSaati") ?? 3;
 
         // 🟢 POST /api/auth/admin-basvuru
         //
@@ -1224,7 +1243,12 @@ namespace ETicaretAPI.Controllers
             // Neden bekleme süresi var? Reddedilen kişi her gün
             // yeniden başvurup süperadmini yıldırabilir. Ret bir
             // karardır, tekrar tekrar sorulmamalı.
-            var esik = DateTime.UtcNow.AddDays(-RedSonrasiBeklemeGunu);
+            // ⭐ DEĞİŞTİ — gün değil saat.
+            //
+            // Bekleme 0 (veya negatif) ayarlanmışsa kural tamamen
+            // devre dışı: eşik "şu an"a eşit olur ve hiçbir geçmiş
+            // kayıt ondan büyük olamaz.
+            var esik = DateTime.UtcNow.AddHours(-RedSonrasiBeklemeSaati);
 
             var yakinRet = await _context.AdminBasvurular
                 .AnyAsync(b => b.UserId == kullanici.Id

@@ -726,6 +726,81 @@ namespace ETicaretAPI.Controllers
                 });
             }
 
+
+            // ---------- 3) BEKLEYEN ADMİN BAŞVURULARI ----------
+            //
+            // ⚠️ SADECE SÜPERADMİN.
+            //
+            // Bu uç controller seviyesinde [Authorize(Roles = "admin")]
+            // ile korunuyor — yani normal adminler de çağırabiliyor.
+            // Başvuru bilgisi onları ilgilendirmiyor ve "kim admin
+            // olmak istiyor" bilgisi kişisel.
+            //
+            // Ayrı bir endpoint açmak yerine cevabın İÇİNDE süzüyoruz:
+            // ekran zaten "gelen ne varsa çiz" mantığında çalışıyor,
+            // dolayısıyla admin bu bölümü hiç görmeyecek.
+            if (User.IsInRole("superadmin"))
+            {
+                var bekleyenBasvurular = await _context.AdminBasvurular
+                    .Where(b => b.Durum == BasvuruDurumu.Beklemede)
+
+                    // En ESKİ üstte: en uzun bekleyen en acil olandır.
+                    .OrderBy(b => b.CreatedAt)
+                    .ThenBy(b => b.Id)
+
+                    .Select(b => new
+                    {
+                        metin = _context.Users
+                            .Where(u => u.Id == b.UserId)
+                            .Select(u => u.FullName)
+                            .FirstOrDefault(),
+
+                        altMetin = _context.Users
+                            .Where(u => u.Id == b.UserId)
+                            .Select(u => u.Email)
+                            .FirstOrDefault(),
+
+                        // "3 gündür bekliyor" yazsın diye tarih veriyoruz.
+                        tarih = (DateTime?)b.CreatedAt,
+
+                        // Başvurunun parasal bir karşılığı yok.
+                        tutar = (decimal?)null,
+
+                        // ⚠️ LİNKE BAŞVURU ID'Sİ EKLİYORUZ.
+                        //
+                        // Ekrandaki DikkatKarti bileşeni satırları
+                        // key={oge.link} ile çiziyor. Hepsine aynı
+                        // "/admin-basvurulari" adresini verseydik React
+                        // "aynı key'e sahip iki kardeş" uyarısı verir ve
+                        // satırları yanlış eşleştirebilirdi.
+                        //
+                        // Sorgu parametresi sayfayı bozmuyor (okumayan
+                        // için görünmez) ama key'i benzersiz yapıyor.
+                        link = "/admin-basvurulari?id=" + b.Id
+                    })
+                    .Take(8)
+                    .ToListAsync();
+
+                if (bekleyenBasvurular.Count > 0)
+                {
+                    uyarilar.Add(new
+                    {
+                        tur = "bekleyen_basvuru",
+                        baslik = "Bekleyen admin başvurusu",
+                        ozet = bekleyenBasvurular.Count + " kişi yöneticilik başvurusu yaptı",
+                        adet = bekleyenBasvurular.Count,
+
+                        // "orta": bekletmek zarar vermiyor ama insan
+                        // bekliyor. Kritik stok gibi para kaybettirmez.
+                        oncelik = "orta",
+
+                        tumunuGorLink = "/admin-basvurulari",
+                        ogeler = bekleyenBasvurular
+                    });
+                }
+            }
+
+
             // ---------- İLERİDE EKLENECEKLER ----------
             // Aşama 7  → bekleyen admin başvuruları (sadece superadmin)
             // Aşama 11 → cevaplanmamış destek talepleri

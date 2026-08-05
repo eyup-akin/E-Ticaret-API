@@ -471,6 +471,44 @@ namespace ETicaretAPI.Services
         // 6) ADMİN BAŞVURUSU REDDEDİLDİ
         public EmailIcerik BasvuruReddedildi(string adSoyad, string? redNedeni)
         {
+
+
+            // ⭐ YENİ — bekleme süresi metni AYARDAN besleniyor.
+            //
+            // ⚠️ Buraya "30 gün" diye yazsaydık, ayarı 3 saate
+            // çekmemize rağmen mail hâlâ 30 gün derdi. Kimse fark
+            // etmezdi çünkü hiçbir yerde hata vermezdi — sadece
+            // müşteriye yanlış bilgi giderdi.
+            //
+            // "İki yerde yazılan gerçek er ya da geç ikiye ayrılır."
+            // AuthController ile bu şablon AYNI ayardan okuyor.
+            var beklemeSaati = _config.GetValue<int?>("Basvuru:RedSonrasiBeklemeSaati") ?? 3;
+
+            // Bekleme kapalıysa (0) "0 saat sonra başvurun" demek
+            // saçma olurdu — cümleyi tamamen değiştiriyoruz.
+            string beklemeMetni;
+
+            if (beklemeSaati <= 0)
+            {
+                beklemeMetni = "Dilerseniz yeniden başvurabilirsiniz.";
+            }
+            else if (beklemeSaati < 24)
+            {
+                beklemeMetni = $"Dilerseniz {beklemeSaati} saat sonra yeniden başvurabilirsiniz.";
+            }
+            else
+            {
+                // 24'ün katı değilse aşağı yuvarlıyoruz — "1,5 gün"
+                // gibi bir ifade e-postada tuhaf durur. Kullanıcı
+                // erken denerse zaten aynı cevabı alır, geç denerse
+                // sorun yok.
+                var gun = beklemeSaati / 24;
+                beklemeMetni = $"Dilerseniz {gun} gün sonra yeniden başvurabilirsiniz.";
+            }
+
+            var tekrarSatiri = $@"<p style=""margin:16px 0 0 0;"">{Kacir(beklemeMetni)}</p>";
+
+
             // ⚠️ redNedeni SÜPERADMİNİN YAZDIĞI SERBEST METİN —
             // yani kullanıcı girdisi. HTML'e girmeden önce Kacir()
             // ile kaçırılmak zorunda. İstisna yok.
@@ -493,9 +531,7 @@ namespace ETicaretAPI.Services
 
 {nedenKutusu}
 
-<p style=""margin:16px 0 0 0;"">
-  Dilerseniz 30 gün sonra yeniden başvurabilirsiniz.
-</p>";
+{tekrarSatiri}";
 
             // ⚠️ Kırmızı DEĞİL turuncu.
             // Kırmızıyı gerçekten geri alınamaz/kritik olaylara

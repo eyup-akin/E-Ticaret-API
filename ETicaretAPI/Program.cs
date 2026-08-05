@@ -269,7 +269,25 @@ builder.Services.AddRateLimiter(options =>
             partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "bilinmeyen",
             factory: _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
             {
-                PermitLimit = 3,
+                //PermitLimit = 3,
+                // ⭐ DEĞİŞTİ: 3 → 5
+                //
+                // Neden gevşettik? Bu ucun brute-force değeri düşük:
+                // cevap HER DURUMDA aynı, yani saldırgan denediği
+                // şifrenin doğru olup olmadığını ANLAYAMIYOR.
+                // Klasik giriş ekranından farkı bu — orada 200/401
+                // farkı bilgi taşır, burada taşımaz.
+                //
+                // Geriye tek gerçek risk kalıyor: BCrypt.Verify
+                // pahalı bir işlem, sınırsız istek CPU'yu yorar (DoS).
+                // Onu 5/saat de engelliyor.
+                //
+                // ⚠️ Sayaç IP'ye göre bölünüyor ve bu ucun bir
+                // zayıflığı: aynı ofisten/kafeden çıkan herkes tek
+                // IP görünür, biri kotayı doldurunca hepsi cezalanır.
+                // Alternatifi yok — uç [Authorize] altında olmadığı
+                // için elimizdeki tek kimlik IP.
+                PermitLimit = 5,
                 Window = TimeSpan.FromHours(1),
                 QueueLimit = 0
             }));

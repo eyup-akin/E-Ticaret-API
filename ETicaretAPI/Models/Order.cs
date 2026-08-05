@@ -35,10 +35,6 @@
         // Uygulanan indirim tutarı. 0 = indirim yok.
         public decimal DiscountAmount { get; set; }
 
-        // ⭐ YENİ — DONDURULMUŞ TESLİMAT ADRESİ
-        // AddressId hâlâ duruyor ama artık ona GÜVENMİYORUZ.
-        // Müşteri adresini sonradan düzenlerse/silerse eski siparişin
-        // kargo etiketi yanlış çıkardı. Sipariş anındaki hali buraya
         // kopyalanır ve bir daha değişmez.
         // (UnitPrice ve CardLast4'te uyguladığımız mantığın aynısı.)
         public string ShippingFullName { get; set; } = string.Empty;
@@ -57,81 +53,33 @@
         public string? CancelReason { get; set; }
         public DateTime? CancelledAt { get; set; }
 
-        // ⭐ YENİ — KARGO TAKİP BİLGİLERİ
-        //
-        // Hepsi nullable (?) çünkü sipariş oluşturulduğu anda bunların
-        // hiçbiri bilinmiyor. Sipariş hayat döngüsünde ilerledikçe
-        // doluyorlar:
-        //
-        //   hazirlaniyor    → hepsi null
-        //   kargoda         → ShippingCompany, TrackingNumber, ShippedAt dolu
-        //   teslim_edildi   → DeliveredAt de dolu
-        //
-        // Bu, CancelReason/CancelledAt ikilisiyle birebir aynı desen:
-        // "henüz olmamış bir olayın bilgisi null'dır."
-        //
-        // ⚠️ Neden bunlar DONDURULMUŞ alan sayılmıyor?
-        // ShippingFullName gibi alanlar başka bir tablodan (Addresses)
-        // kopyalanıyor — kaynak değişse bile sipariş eski hali hatırlasın
-        // diye. Bunlar ise başka hiçbir yerde yaşamıyor, doğrudan buraya
-        // yazılıyor. Kopya değil, asıl veri.
 
-        // Kargo firmasının adı. Örn: "Yurtiçi Kargo"
-        //
-        // Neden ayrı bir ShippingCompanies TABLOSU değil de düz metin?
-        // Firma listesi 4-5 elemanlı, nadiren değişiyor ve firmanın
-        // adından başka hiçbir özelliğini saklamıyoruz. Tablo açmak
-        // her sipariş sorgusuna bir JOIN eklerdi — bedeli faydasından
-        // fazla. Liste appsettings'ten okunacak (1.2'de).
-        //
         // Ayrıca burada saklanan metin bir DONDURULMUŞ değer gibi
         // davranıyor: firma listeden çıksa bile eski sipariş hangi
         // firmayla gittiğini hatırlıyor.
         public string? ShippingCompany { get; set; }
 
-        // Kargo firmasının verdiği takip numarası.
-        //
-        // Neden string, neden long/int değil?
-        // Numaralar firma bazında farklı biçimde: bazıları harf içeriyor
-        // ("YK1234567890"), bazıları başında sıfırla başlıyor ("0012345")
         // ve sayıya çevirirsek o sıfırlar kaybolur. Üzerinde toplama
         // çıkarma yapmadığımız her "numara" aslında bir METİNDİR.
         public string? TrackingNumber { get; set; }
 
-        // Kargoya verildiği an (UTC).
-        // Durum "kargoda" yapıldığında sunucu otomatik yazar — admin
-        // elle girmez, çünkü "ne zaman kargoya verdim" sorusunun cevabı
+      
         // tıklanan andır.
         public DateTime? ShippedAt { get; set; }
 
         // Teslim edildiği an (UTC).
         public DateTime? DeliveredAt { get; set; }
 
-        // ⭐ YENİ — MÜŞTERİ NOTU
-        //
-        // "Kapıya bırakın", "zili çalmayın bebek uyuyor", "iş yerine
-        // öğleden sonra getirin" gibi.
-        //
-        // Sipariş anında müşteri yazar, bir daha DEĞİŞMEZ. Adres gibi
-        // dondurulmuş sayılır: kargo hazırlanırken okunacak talimat,
-        // sonradan değiştirilebilir olsa kargo çıktıktan sonra
+   
         // değiştirilip "ben böyle yazmıştım" tartışması çıkardı.
         public string? CustomerNote { get; set; }
 
-        // ⭐ YENİ — ÇİFT SİPARİŞ KORUMASI (idempotency)
-        //
-        // Mobil, sipariş ekranı açılınca bir kere rastgele anahtar
-        // üretip her istekte aynısını gönderiyor. Aynı anahtarla
-        // ikinci bir sipariş oluşamaz.
-        //
-        // Neden nullable?
-        //   1) Bu alandan ÖNCE oluşmuş tüm siparişlerde değer yok —
-        //      nullable olmasa migration backfill isterdi ve geçmişe
-        //      uydurma anahtarlar yazmak zorunda kalırdık
-        //   2) Admin panelinden veya ileride başka bir kanaldan gelen
-        //      istekler anahtar göndermeyebilir; anahtarsız istek
-        //      geçerli bir istektir, sadece korumasızdır
-        //
+    
+        // durumu yok. Migration eski siparişlere 0 yazacak ve bu
+        // doğru: o siparişlerde kargo gerçekten alınmamıştı.
+        public decimal ShippingCost { get; set; } = 0;
+
+   
         // Benzersizliğini AppDbContext'teki (UserId, IdempotencyKey)
         // bileşik unique index garanti eder.
         public string? IdempotencyKey { get; set; }

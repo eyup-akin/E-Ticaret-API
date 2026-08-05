@@ -18,7 +18,7 @@ namespace ETicaretAPI.Controllers
     //  "analiz et" (geçmişe bak, para hesapla). İki farklı iş.
     //
     //  DASHBOARD'DAN FARKI NE?
-    //    Dashboard = "şu an ne oluyor"     → sabit dönem, özet kutular
+    //    Dashboard = "şu an ne oluyor"      → sabit dönem, özet kutular
     //    Raporlar  = "şu tarihler arasında  → seçilen aralık, tablo,
     //                 ne oldu"                Excel'e aktarılabilir
     //
@@ -37,18 +37,20 @@ namespace ETicaretAPI.Controllers
     public class ReportsController : ControllerBase
     {
         private readonly AppDbContext _context;
-
-        // ⭐ YENİ — ayarlardan geliyor, artık koda gömülü değil.
-        private readonly ETicaretAPI.Services.MagazaAyarlari _ayarlar;
         private readonly RaporTarihi _tarih;
 
-        public ReportsController(AppDbContext context, ETicaretAPI.Services.MagazaAyarlari ayarlar, RaporTarihi tarih)
+        // ⭐ YENİ — kritik stok eşiğinin varsayılanı için (4.1)
+        private readonly MagazaAyarlari _ayarlar;
+
+        public ReportsController(
+            AppDbContext context,
+            RaporTarihi tarih,
+            MagazaAyarlari ayarlar)                    // ⭐ YENİ
         {
             _context = context;
-            _ayarlar = ayarlar;
             _tarih = tarih;
+            _ayarlar = ayarlar;                        // ⭐ YENİ
         }
-
 
         // ============================================================
         //  ORTAK YARDIMCI: iptal edilmemiş siparişler
@@ -622,11 +624,24 @@ namespace ETicaretAPI.Controllers
                 {
                     userId = g.Key,
                     siparisSayisi = g.Count(),
-                    toplamHarcama = g.Sum(o => o.Total),
 
+                    // ⭐ DEĞİŞTİ — kargo hariç.
+                    //
+                    // "En çok harcayan müşteri" sıralamasında kargo
+                    // ücretini saymak yanıltıcı olurdu: 10 kez küçük
+                    // sipariş veren biri (10 × 49,90 kargo) tek büyük
+                    // sipariş verenden daha "değerli" görünürdü.
+                    // Halbuki o kargo parası mağazada kalmıyor.
+                    toplamHarcama = g.Sum(o => o.Total - o.ShippingCost),
+
+                    // ⭐ DEĞİŞTİ — kargo hariç.
+                    // "Ortalama sepet" bir SATIŞ metriğidir; kargo
+                    // sabit bir maliyet kalemi, sepetin büyüklüğü
+                    // hakkında bilgi vermez.
+                    //
                     // Ortalamayı SQL'e hesaplatıyoruz — AVG fonksiyonu
                     // zaten var, bellekte tekrar bölmeye gerek yok.
-                    ortalamaSepet = g.Average(o => o.Total),
+                    ortalamaSepet = g.Average(o => o.Total - o.ShippingCost),
 
                     sonSiparis = g.Max(o => o.CreatedAt)
                 })
@@ -786,9 +801,15 @@ namespace ETicaretAPI.Controllers
                     // değişse bile o gün ne indirim verildiği sabit.
                     toplamIndirim = g.Sum(x => x.cu.DiscountAmount),
 
-                    // Getirilen ciro — indirim SONRASI ödenen tutar.
-                    // Order.Total zaten indirim düşülmüş hali.
-                    getirilenCiro = g.Sum(x => x.o.Total),
+                    // ⭐ DEĞİŞTİ — kargo hariç.
+                    //
+                    // Getirilen ciro — indirim sonrası, kargo öncesi.
+                    // Bir kampanyanın başarısı ürün satışıyla ölçülür.
+                    // Kargo ücretini dahil etseydik, ücretsiz kargo
+                    // eşiğinin altında kalan siparişler kampanyayı
+                    // olduğundan başarılı gösterirdi — üstelik o para
+                    // kargo firmasına gidiyor.
+                    getirilenCiro = g.Sum(x => x.o.Total - x.o.ShippingCost),
 
                     // Kaç FARKLI müşteri kullandı?
                     //
@@ -855,8 +876,5 @@ namespace ETicaretAPI.Controllers
                 kuponlar = satirlar
             });
         }
-
-
-
     }
 }

@@ -17,10 +17,26 @@ namespace ETicaretAPI.Controllers
         private readonly AppDbContext _context;
         private readonly KuponServisi _kuponServisi;
 
-        public CouponsController(AppDbContext context, KuponServisi kuponServisi)
+        // ⭐ YENİ — kupon uygulanınca kargo durumu da değişebilir.
+        //
+        // Neden gerekli? Sepet 550 TL, eşik 500 TL → kargo bedava.
+        // Müşteri 100 TL'lik kupon uygularsa indirimli tutar 450'ye
+        // düşer ve kargo ÜCRETLİ hale gelir.
+        //
+        // Bu bilgiyi burada döndürmezsek mobil "indirim uygulandı,
+        // yeni toplam 450" der; müşteri onay ekranına geçince 499,90
+        // görür. Sürpriz fiyat artışı, sepet terk etmenin bir
+        // numaralı sebebidir.
+        private readonly SepetHesaplayici _hesaplayici;
+
+        public CouponsController(
+            AppDbContext context,
+            KuponServisi kuponServisi,
+            SepetHesaplayici hesaplayici)               // ⭐ YENİ
         {
             _context = context;
             _kuponServisi = kuponServisi;
+            _hesaplayici = hesaplayici;                 // ⭐ YENİ
         }
 
         private int GetUserId()
@@ -71,14 +87,37 @@ namespace ETicaretAPI.Controllers
 
             var araToplam = sepet.Sum(k => k.BirimFiyat * k.Adet);
 
+            // ⭐ YENİ — kargo dahil tam özet.
+            //
+            // Toplamı burada "araToplam - indirim" diye
+            // hesaplamıyoruz artık; sipariş oluştururken kullanılan
+            // AYNI servisi çağırıyoruz. Böylece önizlemede gösterilen
+            // rakam ile gerçekte tahsil edilen rakam ayrışamaz.
+            var ozet = _hesaplayici.Hesapla(araToplam, sonuc.IndirimTutari);
+
             return Ok(new
             {
                 mesaj = sonuc.Mesaj,
                 kod = sonuc.Kupon!.Code,
                 aciklama = sonuc.Kupon.Description,
-                araToplam = araToplam,
-                indirim = sonuc.IndirimTutari,
-                yeniToplam = araToplam - sonuc.IndirimTutari
+
+                araToplam = ozet.AraToplam,
+                indirim = ozet.Indirim,
+
+                // ⭐ YENİ — kargo bilgileri
+                kargoUcreti = ozet.KargoUcreti,
+                ucretsizKargoKazanildi = ozet.UcretsizKargoKazanildi,
+                ucretsizKargoyaKalan = ozet.UcretsizKargoyaKalan,
+
+                // ⚠️ ALAN ADI DEĞİŞMEDİ ama ANLAMI DEĞİŞTİ:
+                // artık kargo dahil nihai tutar.
+                //
+                // Adı "yeniToplam" bırakmak bilinçli — mobil bu alanı
+                // zaten okuyor ve değiştirsek eski sürüm uygulamalar
+                // undefined görürdü. Alan ADI sözleşmedir, kolayca
+                // değiştirilmez. (Aşama 11'de mobil güncellenince
+                // adı netleştirilebilir.)
+                yeniToplam = ozet.Toplam
             });
         }
 

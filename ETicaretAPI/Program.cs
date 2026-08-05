@@ -78,7 +78,7 @@ builder.Services.AddScoped<ETicaretAPI.Services.StokDefteri>();
 // Bu sınıfın DURUMU YOK — sadece IConfiguration'a bakıp değer
 // döndürüyor. Her istek için yeni bir örnek üretmenin hiçbir
 // faydası olmaz, sadece boşuna nesne oluşur.
-//
+//f
 // Kural: bağımlılıkları da singleton olabilen, durumsuz servisler
 // singleton olur. IConfiguration zaten singleton, uyumlu.
 //
@@ -86,6 +86,12 @@ builder.Services.AddScoped<ETicaretAPI.Services.StokDefteri>();
 // ve DbContext isteğe özeldir. Bir singleton'ın DbContext alması
 // ciddi bir hata olurdu (aynı context'i tüm isteklerde paylaşmak).
 builder.Services.AddSingleton<ETicaretAPI.Services.MagazaAyarlari>();
+
+// ⭐ YENİ — sepet/kargo hesabı.
+//
+// Singleton: durumu yok, sadece MagazaAyarlari'na bakıyor
+// (o da singleton). DbContext almadığı için güvenle paylaşılabilir.
+builder.Services.AddSingleton<ETicaretAPI.Services.SepetHesaplayici>();
 
 
 // ⭐ YENİ — dış URL'lerden resim indirebilmek için HttpClient fabrikası

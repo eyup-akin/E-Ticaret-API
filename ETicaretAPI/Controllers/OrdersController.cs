@@ -1,12 +1,10 @@
-﻿
-using ETicaretAPI.Data;
+﻿using ETicaretAPI.Data;
 using ETicaretAPI.DTOs;
 using ETicaretAPI.Models;
 using ETicaretAPI.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-
 using System.Security.Claims;
 
 namespace ETicaretAPI.Controllers
@@ -19,8 +17,6 @@ namespace ETicaretAPI.Controllers
         private readonly AppDbContext _context;
         private readonly IConfiguration _config;
         private readonly KuponServisi _kuponServisi;     // ⭐
-        // ⭐ YENİ — ayarlardan geliyor, artık koda gömülü değil.
-        private readonly ETicaretAPI.Services.MagazaAyarlari _ayarlar;
 
         // ⭐ YENİ — e-posta bildirimleri için üç bağımlılık
         //
@@ -39,17 +35,27 @@ namespace ETicaretAPI.Controllers
         // ⭐ YENİ — stok hareket defteri
         private readonly StokDefteri _defter;
 
-        public OrdersController(
+        // ⭐ YENİ — mağaza ayarları (sipariş no öneki için)
+        private readonly MagazaAyarlari _ayarlar;
 
+        // ⭐ YENİ — kargo/toplam hesabı.
+        //
+        // Toplamı burada elle hesaplamıyoruz. Aynı hesabı mobil
+        // sepet ekranı ve kupon önizleme ucu da yapıyor; üçünün
+        // aynı sonucu vermesinin tek garantisi aynı kodu
+        // çağırmaları.
+        private readonly SepetHesaplayici _hesaplayici;
+
+        public OrdersController(
             AppDbContext context,
             IConfiguration config,
             KuponServisi kuponServisi,                    // ⭐
             IEmailGonderici email,                        // ⭐ YENİ
             EmailSablonlari sablonlar,                    // ⭐ YENİ
             StokDefteri defter,
-            ILogger<OrdersController> log,
-            ETicaretAPI.Services.MagazaAyarlari ayarlar)  // ⭐ YENİ 
-
+            MagazaAyarlari ayarlar,                       // ⭐ YENİ (4.1)
+            SepetHesaplayici hesaplayici,                 // ⭐ YENİ (4.2)
+            ILogger<OrdersController> log)                // ⭐ YENİ
         {
             _context = context;
             _config = config;
@@ -58,7 +64,8 @@ namespace ETicaretAPI.Controllers
             _sablonlar = sablonlar;
             _log = log;
             _defter = defter;
-            _ayarlar = ayarlar;
+            _ayarlar = ayarlar;                           // ⭐ YENİ
+            _hesaplayici = hesaplayici;                   // ⭐ YENİ
         }
 
         private int GetUserId()
@@ -113,7 +120,6 @@ namespace ETicaretAPI.Controllers
                     oi.UnitPrice))
                 .ToListAsync();
         }
-
 
 
         // ============================================================
@@ -185,6 +191,17 @@ namespace ETicaretAPI.Controllers
                 siparisNo = o.OrderNumber,
                 araToplam = o.SubTotal,
                 indirim = o.DiscountAmount,
+
+                // ⭐ YENİ — kargo ücreti.
+                //
+                // Bu metodun yorumunda tam olarak bunu öngörmüştük:
+                // "yarın cevaba yeni bir alan eklendiğinde (örneğin
+                // kargo ücreti) birini güncelleyip diğerini unutmak
+                // işten değildi". Metot ortak olduğu için tek satırla
+                // hem normal akış hem "zaten oluşturulmuştu" cevabı
+                // düzeldi.
+                kargoUcreti = o.ShippingCost,
+
                 kuponKodu = o.CouponCode,
                 toplam = o.Total,
                 odemeDurumu = o.PaymentStatus
@@ -318,8 +335,8 @@ namespace ETicaretAPI.Controllers
                 // 5) Her sepet öğesi için: ürünü bul, stoğu ATOMİK düş, fiyatı dondur
                 //
                 // ⚠️ ESKİ KOD YARIŞ KOŞULUNA AÇIKTI:
-                //       if (urun.Stock < oge.Quantity) return ...;   // OKU + KONTROL
-                //       urun.Stock -= oge.Quantity;                  // YAZ
+                //        if (urun.Stock < oge.Quantity) return ...;   // OKU + KONTROL
+                //        urun.Stock -= oge.Quantity;                  // YAZ
                 //
                 //    Bu üç adım arasında boşluk var. İki istek aynı anda
                 //    gelirse ikisi de kontrolü geçip ikisi de yazabilir
@@ -386,7 +403,6 @@ namespace ETicaretAPI.Controllers
                     // geliyor. "Kontrol et sonra yaz" yerine "yazmayı dene,
                     // sonucuna bak" yaklaşımı.
 
-
                     if (etkilenenSatir == 0)
                     {
                         // ⭐ ARTIK İKİ SEBEP VAR: stok yetersiz VEYA ürün pasif.
@@ -429,7 +445,6 @@ namespace ETicaretAPI.Controllers
                         });
                     }
 
-
                     // ⭐ YENİ — STOK HAREKETİ (satış)
                     //
                     // ⚠️ ÖNCEKİ STOĞU NEREDEN BİLİYORUZ?
@@ -460,8 +475,6 @@ namespace ETicaretAPI.Controllers
                         // referansId'yi aşağıda, sipariş kaydedildikten
                         // sonra dolduracağız.
                         referansId: null));
-
-
 
                     // ⚠️ DİKKAT — urun.Stock'a BİLEREK DOKUNMUYORUZ.
                     //
@@ -590,7 +603,14 @@ namespace ETicaretAPI.Controllers
                     kullanilanKupon = kuponSonucu.Kupon;
                     kullanilanKod = kuponSonucu.Kupon!.Code;
 
-                    toplamTutar = araToplam - indirimTutari;
+                    // ⛔ KALDIRILDI — toplam artık aşağıda 5c'de
+                    // SepetHesaplayici tarafından hesaplanıyor.
+                    //
+                    // Burada bıraksaydık kargo eklenmemiş bir toplam
+                    // yazılırdı. Sonra 5c bunu düzeltirdi, ama kuponsuz
+                    // siparişlerde bu satır hiç çalışmadığı için
+                    // davranış farkı gizli kalırdı.
+                    // toplamTutar = araToplam - indirimTutari;
 
 
                     // ---- ADIM 2: TOPLAM LİMİTİ ATOMİK OLARAK TÜKET ----
@@ -634,7 +654,6 @@ namespace ETicaretAPI.Controllers
                         });
                     }
 
-
                     // ---- ADIM 3: KİŞİ BAŞI LİMİT (kilit altında) ----
                     //
                     // ⭐ BU SAYIM NEDEN GÜVENİLİR?
@@ -671,6 +690,34 @@ namespace ETicaretAPI.Controllers
                     }
                 }
 
+                // ---------- 5c) KARGO VE NİHAİ TOPLAM ----------
+                //
+                // ⚠️ BU BLOK if'İN DIŞINDA — dikkat et.
+                //
+                // Yukarıdaki kupon bloğu "if (dto.CouponCode dolu ise)"
+                // içindeydi. Bu blok onun DIŞINDA, çünkü kargo ücreti
+                // kupon olsun olmasın HER siparişte hesaplanmalı.
+                //
+                // Kupon yoksa indirimTutari = 0 kalır (yukarıda öyle
+                // ilklendi) ve hesap yine doğru çalışır.
+                //
+                // ⚠️ Toplamı burada ELLE hesaplamıyoruz. Aynı hesabı
+                // mobil sepet ekranı ve /coupons/dogrula ucu da yapıyor.
+                // Üçünün aynı sonucu vermesinin tek garantisi aynı kodu
+                // çağırmaları — KuponServisi'ni de bu sebeple yazmıştık.
+                //
+                // Servis:
+                //   • kargo eşiğini İNDİRİMLİ tutara göre değerlendirir
+                //   • kargoyu indirimden SONRA ekler (kupon kargoya inmez)
+                //   • tüm değerleri kuruşa yuvarlar
+                var ozet = _hesaplayici.Hesapla(araToplam, indirimTutari);
+
+                // Order.Total ve Payment.Amount'ın İKİSİ de bu değerden
+                // besleniyor. Ayrı ayrı hesaplasaydık kuruş farkı çıkabilir
+                // ve "sipariş 349,90 ama ödeme 349,89" gibi bir tutarsızlık
+                // doğardı.
+                toplamTutar = ozet.Toplam;
+
                 // 6) Sipariş üst bilgisini oluştur
                 var siparis = new Order
                 {
@@ -698,6 +745,17 @@ namespace ETicaretAPI.Controllers
                     CouponCode = kullanilanKod,
                     DiscountAmount = indirimTutari,
 
+                    // ⭐ YENİ — KARGO ÜCRETİ (dondurulmuş)
+                    //
+                    // ⚠️ _ayarlar.KargoUcreti DEĞİL, ozet.KargoUcreti.
+                    //
+                    // Ayar 49,90 olsa bile müşteri eşiği geçtiyse özet
+                    // 0 döndürür. Doğrudan ayardan alsaydık, ücretsiz
+                    // kargo kazanan müşteriden de ücret almış gibi
+                    // kayda geçerdik — Total 600 ama ShippingCost 49,90
+                    // yazardı ve ikisi birbirini tutmazdı.
+                    ShippingCost = ozet.KargoUcreti,
+
                     // ⭐ YENİ — MÜŞTERİ NOTU
                     //
                     // Boşsa null yazıyoruz, boş string değil.
@@ -716,8 +774,7 @@ namespace ETicaretAPI.Controllers
                     // sık geliyor ve kargo etiketinde hizalamayı bozuyor.
                     CustomerNote = string.IsNullOrWhiteSpace(dto.CustomerNote)
                         ? null
-                        : dto.CustomerNote.Trim()
-                    ,
+                        : dto.CustomerNote.Trim(),
 
                     // ⭐ YENİ — çift sipariş koruması anahtarı.
                     // Anahtar gelmediyse null yazılır; o siparişte
@@ -755,8 +812,6 @@ namespace ETicaretAPI.Controllers
                 }
 
                 _context.StockMovements.AddRange(stokHareketleri);
-
-
 
                 // 7b) KUPON KULLANIM KAYDI
                 if (kullanilanKupon != null)
@@ -892,8 +947,6 @@ namespace ETicaretAPI.Controllers
             }
         }
 
-
-
         // 🟡 GET /api/orders — benim siparişlerim
         [HttpGet]
         public async Task<IActionResult> GetMyOrders()
@@ -917,6 +970,15 @@ namespace ETicaretAPI.Controllers
                     SubTotal = o.SubTotal,
                     CouponCode = o.CouponCode,
                     DiscountAmount = o.DiscountAmount,
+
+                    // ⭐ YENİ — kargo ücreti.
+                    //
+                    // Liste ucunda göndermek burada DOĞRU: tek bir
+                    // decimal, veri yükü yok denecek kadar az. Ürün
+                    // açıklamasını liste ucundan çıkarmıştık çünkü o
+                    // 2000 karakterlik metindi — kural "her şeyi kes"
+                    // değil, "maliyeti faydasından büyük olanı kes".
+                    ShippingCost = o.ShippingCost,
 
                     Total = o.Total,
 
@@ -998,6 +1060,8 @@ namespace ETicaretAPI.Controllers
                 CouponCode = order.CouponCode,
                 DiscountAmount = order.DiscountAmount,
 
+                // ⭐ YENİ — kargo ücreti
+                ShippingCost = order.ShippingCost,
 
                 Total = order.Total,
 
@@ -1021,8 +1085,6 @@ namespace ETicaretAPI.Controllers
 
             return Ok(dto);
         }
-
-
 
         // 🟡 PUT /api/orders/5/cancel — müşteri KENDİ siparişini iptal eder
         // Admin iptaliyle aynı bileşik işlem: stok iadesi + ödeme iadesi + sebep.
@@ -1138,13 +1200,6 @@ namespace ETicaretAPI.Controllers
             }
         }
 
-
-
-
-
-
-
-
         // ==========================================================
         //  ADMIN BÖLÜMÜ
         // ==========================================================
@@ -1193,14 +1248,13 @@ namespace ETicaretAPI.Controllers
             return Ok(KargoFirmalariniGetir());
         }
 
-
         // ⭐ DURUM MAKİNESİ
         // Bir sipariş hangi durumdan hangi duruma geçebilir?
         // Gerçek hayatta sipariş geri gitmez: teslim edilmiş bir sipariş
         // tekrar "hazırlanıyor" olamaz. Bu kuralı burada tanımlıyoruz.
         //
         // hazirlaniyor ──→ kargoda ──→ teslim_edildi  (son)
-        //       └──────────────┴──────→ iptal          (son)
+        //        └──────────────┴──────→ iptal          (son)
         private static readonly Dictionary<string, string[]> GecerliGecisler =
             new Dictionary<string, string[]>
             {
@@ -1289,7 +1343,7 @@ namespace ETicaretAPI.Controllers
                     durum = x.o.Status,
                     odemeDurumu = x.o.PaymentStatus,
                     kartSon4 = x.o.CardLast4,
-                    tarih = x.o.CreatedAt,
+                    tاريخ = x.o.CreatedAt,
 
                     // ⭐ YENİ — kargo takip bilgisi.
                     //
@@ -1318,7 +1372,6 @@ namespace ETicaretAPI.Controllers
                     // Kaç ÇEŞİT ürün (satır sayısı)
                     urunCesidi = _context.OrderItems.Count(oi => oi.OrderId == x.o.Id),
 
-                    // Kaç ADET ürün (miktarların toplamı)
                     // Kaç ADET ürün (miktarların toplamı)
                     toplamAdet = _context.OrderItems
                         .Where(oi => oi.OrderId == x.o.Id)
@@ -1434,6 +1487,15 @@ namespace ETicaretAPI.Controllers
                 kuponKodu = order.CouponCode,
                 indirim = order.DiscountAmount,
 
+                // ⭐ YENİ — kargo ücreti.
+                //
+                // Anahtar Türkçe: bu uç OrderDto değil anonim nesne
+                // döndürüyor ve panelin geri kalanı (siparisNo,
+                // kartSon4, kargoFirmasi) Türkçe. Dosya içinde
+                // tutarlı olmak, projeye tek bir global kural
+                // dayatmaktan önemli.
+                kargoUcreti = order.ShippingCost,
+
                 durum = order.Status,
                 odemeDurumu = order.PaymentStatus,
                 kartSon4 = order.CardLast4,
@@ -1471,8 +1533,6 @@ namespace ETicaretAPI.Controllers
                 odeme = odeme
             });
         }
-
-
 
         // 🔴 GET /api/admin/orders/etiket?ids=5,7,12
         //
@@ -1599,9 +1659,6 @@ namespace ETicaretAPI.Controllers
 
             return Ok(new { magaza = magaza, etiketler = sonuc });
         }
-
-
-
 
 
         // 🔴 PUT /api/admin/orders/5/status — kargo durumunu İLERLET
@@ -1793,7 +1850,6 @@ namespace ETicaretAPI.Controllers
             });
         }
 
-
         // 🔴 PUT /api/admin/orders/5/cancel — siparişi iptal et (sebep zorunlu)
         // Ayrı bir endpoint, çünkü iptal sadece bir "durum değişikliği" değil:
         // stok iadesi + ödeme iadesi + sebep kaydı içeren BİLEŞİK bir işlem.
@@ -1926,8 +1982,5 @@ namespace ETicaretAPI.Controllers
                 throw; // global middleware yakalasın
             }
         }
-
-
-
     }
 }

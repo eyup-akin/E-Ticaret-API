@@ -420,6 +420,187 @@ namespace ETicaretAPI.Controllers
         }
 
 
+        // 🔴 GET /api/products/5/stok-hareketleri?page=1&pageSize=20
+        //
+        // Bir ürünün stok DEFTERİ. "Şu an kaç adet var" sorusunun cevabı
+        // Product.Stock'ta; "nasıl bu hale geldi" sorusunun cevabı burada.
+        //
+        // Neden sadece admin?
+        // Rakip firma bir ürünün satış hızını buradan hesaplayabilir:
+        // son 30 günde kaç adet 'satis' hareketi olduğuna bakması yeterli.
+        // Bu ticari bir bilgi. Üç katmanlı yetkinin en dıştaki (ve tek
+        // gerçek olan) katmanı burası.
+        [Authorize(Roles = "admin")]
+        [HttpGet("{id}/stok-hareketleri")]
+        public async Task<IActionResult> GetStokHareketleri(
+            int id,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 20)
+        {
+            // ---- SAYFALAMA PARAMETRELERİNİ SINIRLA ----
+            //
+            // İstemciden gelen hiçbir sayıya güvenmiyoruz. pageSize=999999
+            // yazan biri tek istekle tüm tabloyu belleğe çektirebilirdi.
+            // Üst sınır projedeki diğer uçlarla aynı (100).
+            if (page < 1)
+            {
+                page = 1;
+            }
+
+            if (pageSize < 1 || pageSize > 100)
+            {
+                pageSize = 20;
+            }
+
+            // ---- ÜRÜN VAR MI? ----
+            //
+            // Ürünü ayrıca çekiyoruz çünkü iki şeye ihtiyacımız var:
+            //   • mevcut stok (kontrol hesabı için)
+            //   • ürün adı (ekranın başlığı için)
+            //
+            // Yoksa 404: olmayan ürünün defteri de olmaz.
+            var urun = await _context.Products
+                .Where(p => p.Id == id)
+                .Select(p => new { p.Id, p.Name, p.Stock })
+                .FirstOrDefaultAsync();
+
+            if (urun == null)
+            {
+                return NotFound(new { mesaj = "Ürün bulunamadı!" });
+            }
+
+            // ---- SORGUYU KUR (henüz veritabanına GİTMİYOR) ----
+            //
+            // IQueryable: bu satır bir SQL çalıştırmıyor, sadece "ne
+            // soracağımızı" tarif ediyor. Aşağıda üç farklı şey için
+            // (sayım, toplam, liste) yeniden kullanacağız ve her biri
+            // TEK SQL'e derlenecek.
+            //
+            // List<> olsaydı tüm hareketleri belleğe çekip orada
+            // uğraşırdık — 50.000 satırlık bir üründe felaket.
+            var sorgu = _context.StockMovements
+                .Where(h => h.ProductId == id);
+
+            // ---- DEĞİŞMEZ KONTROLÜ ----
+            //
+            // Bakiye/defter deseninin bedeli şu eşitlik:
+            //     Product.Stock == SUM(StockMovement.Miktar)
+            //
+            // Bu sorguyu elle çalıştırmayı unuturuz. Cevaba gömünce
+            // ekranda sürekli durur — bozulduğu gün fark edilir.
+            //
+            // ⚠️ (int?) CAST'İ ŞART.
+            // SQL'de SUM boş küme üzerinde 0 değil NULL döner. Cast
+            // olmadan EF bunu int'e map etmeye çalışır ve hiç hareketi
+            // olmayan üründe exception fırlar. ?? 0 ile varsayılanı
+            // veriyoruz.
+            //
+            // ⚠️ ?? kullanıyoruz, || değil: sıfır burada GEÇERLİ bir
+            // değer (defter toplamı gerçekten 0 olabilir).
+            var defterToplami = await sorgu.SumAsync(h => (int?)h.Miktar) ?? 0;
+
+            // ⚠️ Toplam sayıyı SAYFALAMADAN ÖNCE alıyoruz.
+            // Sonra alsaydık en fazla pageSize kadar çıkardı ve
+            // "toplam 340 hareket" bilgisi hep yanlış olurdu.
+            var toplam = await sorgu.CountAsync();
+
+            // ---- HAREKET LİSTESİ ----
+            var hareketler = await sorgu
+                // En yeni üstte — deftere bakan kişi "en son ne oldu"
+                // sorusuyla gelir.
+                .OrderByDescending(h => h.CreatedAt)
+
+                // ⚠️ İKİNCİL SIRALAMA ÖLÇÜTÜ — ATLAMA.
+                //
+                // Tek siparişte 3 ürün varsa 3 hareket AYNI anda yazılır
+                // ve CreatedAt değerleri datetime2 hassasiyetinde birebir
+                // aynı olabilir. Eşit değerlerde SQL Server garantili sıra
+                // vermez: aynı kayıt 1. sayfada da 2. sayfada da çıkabilir,
+                // başka bir kayıt hiç görünmeyebilir.
+                //
+                // Id benzersiz olduğu için sırayı kesinleştiriyor.
+                .ThenByDescending(h => h.Id)
+
+                .Skip((page - 1) * pageSize)   // SQL: OFFSET
+                .Take(pageSize)                // SQL: FETCH NEXT
+
+                .Select(h => new
+                {
+                    id = h.Id,
+                    tarih = h.CreatedAt,
+
+                    sebep = h.Sebep,
+                    miktar = h.Miktar,              // işaretli: +5 / −3
+                    oncekiStok = h.OncekiStok,
+                    sonrakiStok = h.SonrakiStok,
+
+                    yapanId = h.KullaniciId,
+
+                    // ⚠️ ALT SORGU — JOIN DEĞİL. BU BİLİNÇLİ.
+                    //
+                    // KullaniciId nullable (sistem işlerinde boş kalır).
+                    // LINQ'teki "join ... on ... equals" INNER JOIN'e
+                    // derlenir ve eşleşmeyen satırı KOMPLE DÜŞÜRÜR —
+                    // yani sistem kayıtları listede hiç görünmez, ama
+                    // defter toplamına dahil olur. Sonuç: "liste ile
+                    // toplam neden tutmuyor" muamması.
+                    //
+                    // Alt sorgu eşleşme bulamazsa NULL döner ve satır
+                    // YERİNDE KALIR. LEFT JOIN'in yaptığı işi yapıyor
+                    // ama LINQ'te çok daha okunaklı.
+                    //
+                    // Performans endişesi yok: tek SQL üretiliyor (N+1
+                    // değil) ve arama primary key üzerinden.
+                    yapan = _context.Users
+                        .Where(u => u.Id == h.KullaniciId)
+                        .Select(u => u.FullName)
+                        .FirstOrDefault(),
+
+                    referansTipi = h.ReferansTipi,
+                    referansId = h.ReferansId,
+
+                    // Teknik anahtar (Id) ≠ iş anahtarı (OrderNumber).
+                    // Ekranda "Sipariş 42" değil "SP-260724-4821" yazsın.
+                    //
+                    // Koşulu ternary ile dışarıda değil, Where'in İÇİNDE
+                    // yazıyoruz — EF'in çeviremeyeceği bir ifade riski
+                    // kalmasın. ReferansTipi "Order" değilse hiçbir satır
+                    // eşleşmez, null döner.
+                    siparisNo = _context.Orders
+                        .Where(o => o.Id == h.ReferansId && h.ReferansTipi == "Order")
+                        .Select(o => o.OrderNumber)
+                        .FirstOrDefault(),
+
+                    aciklama = h.Aciklama
+                })
+                .ToListAsync();
+
+            var toplamSayfa = (int)Math.Ceiling(toplam / (double)pageSize);
+
+            return Ok(new
+            {
+                urunId = urun.Id,
+                urunAdi = urun.Name,
+
+                // Ekranın üstünde duracak kontrol bloğu.
+                // fark != 0 ise "defter eksik başladı VEYA bir yazma
+                // noktası atlandı" demektir. Hangisi olduğunu farkın
+                // DEĞİŞİP değişmediği söyler.
+                kontrol = new
+                {
+                    mevcutStok = urun.Stock,
+                    defterToplami = defterToplami,
+                    fark = urun.Stock - defterToplami
+                },
+
+                hareketler = hareketler,
+                toplam = toplam,
+                sayfa = page,
+                sayfaBoyutu = pageSize,
+                toplamSayfa = toplamSayfa
+            });
+        }
+
         // 🔴 POST /api/products
         [Authorize(Roles = "admin")]
         [HttpPost]

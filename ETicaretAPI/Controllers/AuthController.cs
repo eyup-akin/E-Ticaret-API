@@ -1121,5 +1121,147 @@ namespace ETicaretAPI.Controllers
 
             await _context.SaveChangesAsync();
         }
+
+
+        // ==========================================================
+        //  ADMİN BAŞVURUSU
+        // ==========================================================
+
+        // Reddedilen kişi ne kadar bekleyecek?
+        // Sabit olarak duruyor: "30" sayısını koda serpiştirseydik
+        // yarın 60 yapmak istediğimizde birini atlardık.
+        private const int RedSonrasiBeklemeGunu = 30;
+
+        // 🟢 POST /api/auth/admin-basvuru
+        //
+        // Herkese açık ama şifre doğruluyor: başvuran, o hesabın
+        // sahibi olduğunu kanıtlamak zorunda.
+        [EnableRateLimiting("basvuru")]
+        [HttpPost("admin-basvuru")]
+        public async Task<IActionResult> AdminBasvuru([FromBody] AdminBasvuruCreateDto dto)
+        {
+            // ⚠️ TEK CEVAP — HER DURUMDA AYNI.
+            //
+            // Hesap yok, şifre yanlış, kişi zaten admin, bekleyen
+            // başvurusu var, 30 gün dolmamış... Hepsinde bu cevap
+            // dönüyor.
+            //
+            // Neden? Farklı cevap verirsek saldırgan bu ucu bir
+            // TARAYICI gibi kullanır:
+            //   "hesap bulunamadı"      → bu e-posta kayıtlı DEĞİL
+            //   "zaten adminsin"        → bu e-posta bir ADMİN
+            //   "şifre yanlış"          → bu e-posta KAYITLI
+            // Üçü de sızıntı. forgot-password'de aynı kararı verdik.
+            //
+            // Bedeli: gerçekten başvuran biri, başvurusunun neden
+            // işlenmediğini bilemez. Kabul ediyoruz — bu uç ömürde
+            // bir kez kullanılan bir uç.
+            var standartCevap = Ok(new
+            {
+                mesaj = "Başvurunuz alındı. Değerlendirme sonucu e-posta ile bildirilecektir."
+            });
+
+            var email = dto.Email.Trim().ToLowerInvariant();
+
+            var kullanici = await _context.Users
+                .FirstOrDefaultAsync(u => u.Email == email);
+
+            // ---- KİMLİK KONTROLLERİ ----
+            //
+            // Hepsi tek bir if'te toplanabilirdi ama ayrı ayrı
+            // yazmak hangi kuralın neyi koruduğunu okunur kılıyor.
+
+            if (kullanici == null)
+            {
+                return standartCevap;
+            }
+
+            // Pasifleştirilmiş hesap başvuramaz.
+            if (!kullanici.IsActive)
+            {
+                return standartCevap;
+            }
+
+            // ⚠️ E-posta doğrulanmamışsa başvuru kabul edilmez.
+            // Doğrulanmamış adres, o adresin sahibi olduğunu
+            // kanıtlamıyor demektir — admin yetkisi için yetersiz.
+            if (!kullanici.EmailDogrulandiMi)
+            {
+                return standartCevap;
+            }
+
+            // Şifre kontrolü: hesabın sahibi mi?
+            if (!BCrypt.Net.BCrypt.Verify(dto.Sifre, kullanici.PasswordHash))
+            {
+                return standartCevap;
+            }
+
+            // ---- İŞ KURALLARI ----
+
+            // Zaten admin veya süperadmin olan başvuramaz.
+            if (kullanici.Role != "customer")
+            {
+                return standartCevap;
+            }
+
+            // Bekleyen başvurusu var mı?
+            //
+            // ⚠️ Bu kontrol GARANTİ DEĞİL — iki eşzamanlı istek
+            // ikisi de "yok" görebilir. Garantiyi aşağıdaki
+            // DbUpdateException yakalaması (filtreli unique index)
+            // veriyor. Bu if sadece ucuz durumu ucuza halleder.
+            var bekleyenVar = await _context.AdminBasvurular
+                .AnyAsync(b => b.UserId == kullanici.Id
+                            && b.Durum == BasvuruDurumu.Beklemede);
+
+            if (bekleyenVar)
+            {
+                return standartCevap;
+            }
+
+            // Son 30 günde reddedilmiş mi?
+            //
+            // Neden bekleme süresi var? Reddedilen kişi her gün
+            // yeniden başvurup süperadmini yıldırabilir. Ret bir
+            // karardır, tekrar tekrar sorulmamalı.
+            var esik = DateTime.UtcNow.AddDays(-RedSonrasiBeklemeGunu);
+
+            var yakinRet = await _context.AdminBasvurular
+                .AnyAsync(b => b.UserId == kullanici.Id
+                            && b.Durum == BasvuruDurumu.Reddedildi
+                            && b.KararTarihi != null
+                            && b.KararTarihi > esik);
+
+            if (yakinRet)
+            {
+                return standartCevap;
+            }
+
+            // ---- KAYDI OLUŞTUR ----
+            _context.AdminBasvurular.Add(new AdminBasvuru
+            {
+                UserId = kullanici.Id,
+                Gerekce = dto.Gerekce.Trim(),
+                Durum = BasvuruDurumu.Beklemede,
+                CreatedAt = DateTime.UtcNow
+            });
+
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch (DbUpdateException)
+            {
+                // Filtreli unique index devreye girdi: bu kullanıcının
+                // zaten bekleyen bir başvurusu varmış (yarış koşulu).
+                //
+                // Kullanıcı açısından hiçbir şey değişmiyor — başvurusu
+                // zaten sistemde. Aynı cevabı dönüyoruz.
+                return standartCevap;
+            }
+
+            return standartCevap;
+        }
+
     }
 }

@@ -433,5 +433,77 @@ namespace ETicaretAPI.Services
                 $"Siparişiniz iptal edildi — {siparis.OrderNumber}",
                 Iskelet("Sipariş İptal Edildi", "#c0392b", govde));
         }
+
+        // 5) ADMİN BAŞVURUSU ONAYLANDI
+        public EmailIcerik BasvuruOnaylandi(string adSoyad)
+        {
+            var panelUrl = _config["Uygulama:PanelUrl"] ?? "";
+
+            var panelSatiri = string.IsNullOrWhiteSpace(panelUrl)
+                ? string.Empty
+                : $@"<p style=""margin:16px 0 0 0;"">
+                       Yönetim paneline buradan giriş yapabilirsiniz:<br/>
+                       <a href=""{panelUrl}"">{Kacir(panelUrl)}</a>
+                     </p>";
+
+            var govde = $@"
+<p style=""margin:0 0 12px 0;"">Merhaba {Kacir(adSoyad)},</p>
+
+<p style=""margin:0 0 4px 0;"">
+  Yöneticilik başvurunuz onaylandı. Hesabınız artık yönetici yetkilerine sahip.
+</p>
+
+<p style=""margin:12px 0 0 0;"">
+  <b>Güvenlik nedeniyle mevcut oturumlarınız sonlandırıldı.</b>
+  Yeni yetkilerinizin geçerli olması için tekrar giriş yapmanız gerekiyor.
+</p>
+
+{panelSatiri}";
+
+            // Yeşil: olumlu karar. Renk tek başına bilgi taşımıyor,
+            // başlık zaten ne olduğunu söylüyor.
+            return new EmailIcerik(
+                "Yöneticilik başvurunuz onaylandı",
+                Iskelet("Başvurunuz Onaylandı", "#27ae60", govde));
+        }
+
+
+        // 6) ADMİN BAŞVURUSU REDDEDİLDİ
+        public EmailIcerik BasvuruReddedildi(string adSoyad, string? redNedeni)
+        {
+            // ⚠️ redNedeni SÜPERADMİNİN YAZDIĞI SERBEST METİN —
+            // yani kullanıcı girdisi. HTML'e girmeden önce Kacir()
+            // ile kaçırılmak zorunda. İstisna yok.
+            var nedenKutusu = string.IsNullOrWhiteSpace(redNedeni)
+                ? string.Empty
+                : $@"<div style=""margin:16px 0 0 0;padding:14px 16px;background-color:#fafbfc;
+                            border-left:3px solid #e74c3c;border-radius:4px;"">
+                       <b>Gerekçe</b><br/>
+                       {Kacir(redNedeni)}
+                     </div>";
+
+            var govde = $@"
+<p style=""margin:0 0 12px 0;"">Merhaba {Kacir(adSoyad)},</p>
+
+<p style=""margin:0 0 4px 0;"">
+  Yöneticilik başvurunuz bu kez olumlu sonuçlanmadı.
+  Mevcut hesabınız ve alışveriş geçmişiniz etkilenmedi, normal şekilde
+  kullanmaya devam edebilirsiniz.
+</p>
+
+{nedenKutusu}
+
+<p style=""margin:16px 0 0 0;"">
+  Dilerseniz 30 gün sonra yeniden başvurabilirsiniz.
+</p>";
+
+            // ⚠️ Kırmızı DEĞİL turuncu.
+            // Kırmızıyı gerçekten geri alınamaz/kritik olaylara
+            // saklıyoruz (sipariş iptali gibi). Bir başvurunun
+            // reddi kötü haber ama felaket değil.
+            return new EmailIcerik(
+                "Yöneticilik başvurunuz hakkında",
+                Iskelet("Başvuru Sonucu", "#e67e22", govde));
+        }
     }
 }

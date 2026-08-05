@@ -245,6 +245,37 @@ builder.Services.AddRateLimiter(options =>
             }));
 
 
+
+    // ⭐ YENİ — "basvuru" politikası: admin başvuru ucu için.
+    //
+    // NEDEN AYRI BİR POLİTİKA?
+    //
+    // Bu uç ŞİFRE DOĞRULUYOR — yani giriş ekranı kadar brute-force'a
+    // açık. Limitsiz bırakırsak saldırgan buradan şifre deneyebilir
+    // ve /login'deki 5/dakika limitini tamamen atlamış olur.
+    // "Rate limit sadece giriş için değildir."
+    //
+    // NEDEN "giris" POLİTİKASINI KULLANMADIK?
+    // Sayaç paylaşılırdı: başvuru yapan biri kendi giriş hakkını
+    // yakardı ve sonra hesabına giremezdi.
+    //
+    // NEDEN IP'YE GÖRE BÖLÜNÜYOR?
+    // Bu uç [Authorize] ALTINDA DEĞİL — çağıranın kim olduğunu
+    // bilmiyoruz. Elimizdeki tek kimlik IP.
+    //
+    // 3/saat: gerçek bir başvuru sahibi ömründe bir kez kullanır.
+    options.AddPolicy("basvuru", httpContext =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "bilinmeyen",
+            factory: _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 3,
+                Window = TimeSpan.FromHours(1),
+                QueueLimit = 0
+            }));
+
+
+
     // Limit aşılınca ne dönsün? Kendi { mesaj } formatımıza uyalım
     // (mobil/admin zaten veri.mesaj okuyor).
     options.OnRejected = async (context, token) =>

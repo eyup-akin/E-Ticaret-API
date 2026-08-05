@@ -1,10 +1,11 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using ETicaretAPI.Data;
+using ETicaretAPI.DTOs;
+using ETicaretAPI.Models;
+using ETicaretAPI.Services;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
-using ETicaretAPI.Data;
-using ETicaretAPI.Models;
-using ETicaretAPI.DTOs;
 namespace ETicaretAPI.Controllers
 {
     [Route("api/admin")]
@@ -20,12 +21,23 @@ namespace ETicaretAPI.Controllers
         // siparişler bir ÖNCEKİ günün kutusuna düşüyordu.
         private readonly ETicaretAPI.Services.RaporTarihi _tarih;
 
+        // ⭐ YENİ — karar bildirimi e-postası için
+        private readonly ETicaretAPI.Services.IEmailGonderici _email;
+        private readonly ETicaretAPI.Services.EmailSablonlari _sablonlar;
+        private readonly ILogger<AdminController> _log;
+
         public AdminController(
             AppDbContext context,
-            ETicaretAPI.Services.RaporTarihi tarih)
+            ETicaretAPI.Services.RaporTarihi tarih,
+            ETicaretAPI.Services.IEmailGonderici email,          // ⭐ YENİ
+            ETicaretAPI.Services.EmailSablonlari sablonlar,      // ⭐ YENİ
+            ILogger<AdminController> log)                        // ⭐ YENİ
         {
             _context = context;
             _tarih = tarih;
+            _email = email;                                       // ⭐ YENİ
+            _sablonlar = sablonlar;                               // ⭐ YENİ
+            _log = log;                                           // ⭐ YENİ
         }
 
         // 🔴 GET /api/admin/users
@@ -760,6 +772,67 @@ namespace ETicaretAPI.Controllers
             });
         }
 
+
+        // ⭐ YENİ — ROL DEĞİŞTİRME: ORTAK ADIMLAR
+        //
+        // NEDEN BU METOT VAR?
+        //
+        // Rol değiştirmek tek satırlık bir iş DEĞİL. Dört adımı var
+        // ve dördü de atlanırsa güvenlik açığı doğar:
+        //
+        //   1) Rolü yaz
+        //   2) SecurityStamp'i yenile → elindeki access token'lar
+        //      anında geçersiz olur
+        //   3) Refresh token'ları iptal et → yenileme yoluyla
+        //      oturumunu sürdüremesin
+        //   4) Denetim kaydı yaz → "bu kişiyi kim admin yaptı?"
+        //
+        // Bu dört adım şu an ChangeUserRole'de yazılı. Başvuru
+        // onaylama da AYNI dördünü yapacak.
+        //
+        // Kopyalasaydık: yarın beşinci bir adım eklendiğinde (mesela
+        // "bildirim gönder") birini güncelleyip diğerini unutmak
+        // işten değildi — ve unutulan taraf SESSİZCE eksik çalışırdı.
+        //
+        // "İki yerde yazılan gerçek er ya da geç ikiye ayrılır."
+        //
+        // ⚠️ SaveChanges ÇAĞIRMIYOR — bilerek. Çağıran, kendi
+        // işlemiyle aynı SaveChanges'te yazsın. StokDefteri'ndeki
+        // desenin aynısı.
+        private async Task RolDegistirAsync(User user, string yeniRol, string islemAdi)
+        {
+            var eskiRol = user.Role;
+
+            user.Role = yeniRol;
+
+            // Damgayı yenile — elindeki TÜM access token'lar geçersiz.
+            user.SecurityStamp = Guid.NewGuid().ToString();
+
+            // ⭐ Refresh token'ları da iptal et.
+            //
+            // Neden gerekli? SecurityStamp sadece ACCESS token'ı
+            // öldürür. Elinde geçerli bir refresh token kalırsa
+            // 15 dakika sonra yenileyip yeni bir access token alır
+            // ve oturumu hiç kesilmemiş gibi devam eder.
+            //
+            // ExecuteUpdateAsync: tek SQL cümlesi, satırları belleğe
+            // çekmeden günceller. 30 oturumu olan bir kullanıcıda
+            // 30 nesne yüklemekten çok daha ucuz.
+            //
+            // ⚠️ ExecuteUpdateAsync change tracker'ı ATLAR ve
+            // ANINDA çalışır — SaveChanges beklemez. Burada bu
+            // sorun değil: token iptali geri alınsa bile kullanıcı
+            // sadece yeniden giriş yapmak zorunda kalır, veri
+            // bozulmaz.
+            await _context.RefreshTokens
+                .Where(t => t.UserId == user.Id && t.RevokedAt == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, DateTime.UtcNow));
+
+            await LogEkle(user.Id, user.FullName, islemAdi, eskiRol, yeniRol);
+        }
+
+
+
         // 🟣 PUT /api/admin/users/5/role — kullanıcının rolünü değiştir
         [Authorize(Roles = "superadmin")]  // ⭐ admin YETMEZ, süper admin şart
         [HttpPut("users/{id}/role")]
@@ -805,15 +878,8 @@ namespace ETicaretAPI.Controllers
                 return Ok(new { mesaj = "Kullanıcı zaten bu rolde." });
             }
 
-            var eskiRol = user.Role;
-
-            user.Role = yeniRol;
-
-            // ⭐ DAMGAYI YENİLE — bu kişinin ELİNDEKİ TÜM TOKEN'LAR anında geçersiz olur.
-            // Yetkisi düşürülen biri, eski token'ıyla admin gibi davranamaz.
-            user.SecurityStamp = Guid.NewGuid().ToString();
-
-            await LogEkle(user.Id, user.FullName, "rol_degisti", eskiRol, yeniRol);
+            // ⭐ DEĞİŞTİ — dört adım artık ortak metotta.
+            await RolDegistirAsync(user, yeniRol, "rol_degisti");
 
             await _context.SaveChangesAsync();
 
@@ -883,6 +949,248 @@ namespace ETicaretAPI.Controllers
                     : $"{user.FullName} devre dışı bırakıldı ve oturumu sonlandırıldı.",
                 aktifMi = dto.IsActive
             });
+        }
+
+        // ==========================================================
+        //  ADMİN BAŞVURULARI — SADECE SÜPER ADMİN
+        // ==========================================================
+
+        // 🟣 GET /api/admin/basvurular?durum=beklemede&page=1&pageSize=10
+        [Authorize(Roles = "superadmin")]
+        [HttpGet("basvurular")]
+        public async Task<IActionResult> GetBasvurular(
+            [FromQuery] string? durum,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 10)
+        {
+            if (page < 1)
+            {
+                page = 1;
+            }
+
+            if (pageSize < 1 || pageSize > 100)
+            {
+                pageSize = 10;
+            }
+
+            var sorgu = _context.AdminBasvurular.AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(durum))
+            {
+                sorgu = sorgu.Where(b => b.Durum == durum);
+            }
+
+            // Toplam FİLTRELERDEN SONRA, sayfalamadan ÖNCE.
+            var toplam = await sorgu.CountAsync();
+
+            // Bekleyen sayısı filtreden BAĞIMSIZ hesaplanıyor:
+            // ekran "Karar Verilenler" sekmesindeyken bile üstteki
+            // rozet kaç başvurunun beklediğini göstermeli.
+            var bekleyenSayisi = await _context.AdminBasvurular
+                .CountAsync(b => b.Durum == BasvuruDurumu.Beklemede);
+
+            var basvurular = await sorgu
+                // Bekleyenlerde en ESKİ üstte olmalı — en uzun
+                // bekleyen en acil olandır. (Sipariş listesindeki
+                // "en yeni üstte" mantığının tersi; soru farklı.)
+                .OrderBy(b => b.CreatedAt)
+
+                // Eşit CreatedAt değerlerinde sıra garanti olsun.
+                .ThenBy(b => b.Id)
+
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+
+                .Select(b => new
+                {
+                    id = b.Id,
+                    gerekce = b.Gerekce,
+                    durum = b.Durum,
+                    tarih = b.CreatedAt,
+
+                    // ⚠️ ALT SORGU — JOIN DEĞİL.
+                    //
+                    // Başvuran kullanıcı normalde silinmez ama
+                    // hesabını kapatmış olabilir (anonimleştirme).
+                    // INNER JOIN o başvuruyu listeden komple
+                    // düşürürdü ve sayaçla liste tutmazdı.
+                    basvuranId = b.UserId,
+
+                    basvuran = _context.Users
+                        .Where(u => u.Id == b.UserId)
+                        .Select(u => u.FullName)
+                        .FirstOrDefault(),
+
+                    basvuranEmail = _context.Users
+                        .Where(u => u.Id == b.UserId)
+                        .Select(u => u.Email)
+                        .FirstOrDefault(),
+
+                    kararTarihi = b.KararTarihi,
+                    redNedeni = b.RedNedeni,
+
+                    kararVeren = _context.Users
+                        .Where(u => u.Id == b.KararVerenUserId)
+                        .Select(u => u.FullName)
+                        .FirstOrDefault()
+                })
+                .ToListAsync();
+
+            var toplamSayfa = (int)Math.Ceiling(toplam / (double)pageSize);
+
+            return Ok(new
+            {
+                basvurular = basvurular,
+                bekleyenSayisi = bekleyenSayisi,
+                toplam = toplam,
+                sayfa = page,
+                sayfaBoyutu = pageSize,
+                toplamSayfa = toplamSayfa
+            });
+        }
+
+
+        // 🟣 PUT /api/admin/basvurular/5/onayla
+        [Authorize(Roles = "superadmin")]
+        [HttpPut("basvurular/{id}/onayla")]
+        public async Task<IActionResult> BasvuruOnayla(int id)
+        {
+            var basvuru = await _context.AdminBasvurular.FindAsync(id);
+
+            if (basvuru == null)
+            {
+                return NotFound(new { mesaj = "Başvuru bulunamadı!" });
+            }
+
+            // ⚠️ İDEMPOTENTLİK — ikinci çağrı HATA DEĞİL BAŞARI döner.
+            //
+            // "Durum değiştiren uçlar PUT ve idempotent olmalı."
+            // Süperadmin çift tıklarsa veya sayfa yenilenirse ikinci
+            // istek gelir. Hata dönseydi ekranda kırmızı bir uyarı
+            // çıkardı — ama aslında iş TAMAMLANMIŞTI.
+            if (basvuru.Durum == BasvuruDurumu.Onaylandi)
+            {
+                return Ok(new { mesaj = "Bu başvuru zaten onaylanmış." });
+            }
+
+            if (basvuru.Durum == BasvuruDurumu.Reddedildi)
+            {
+                return BadRequest(new
+                {
+                    mesaj = "Reddedilmiş bir başvuru onaylanamaz. Kullanıcının rolünü kullanıcılar sayfasından değiştirebilirsin."
+                });
+            }
+
+            var kullanici = await _context.Users.FindAsync(basvuru.UserId);
+
+            if (kullanici == null)
+            {
+                return BadRequest(new { mesaj = "Başvuran kullanıcı artık sistemde yok." });
+            }
+
+            // ⚠️ SÜPERADMİN BAŞVURUYLA VERİLEMEZ.
+            //
+            // Bu uç sadece "admin" atıyor — "superadmin" hiçbir
+            // koşulda buradan verilemez. Sistemin kök yetkisi
+            // uygulamanın içinden üretilemez (bootstrap kuralı,
+            // AtanabilirRoller whitelist'iyle aynı gerekçe).
+            if (kullanici.Role != "customer")
+            {
+                return BadRequest(new
+                {
+                    mesaj = $"{kullanici.FullName} zaten '{kullanici.Role}' rolünde."
+                });
+            }
+
+            // Dört adım tek çağrıda: rol + damga + token iptali + log
+            await RolDegistirAsync(kullanici, "admin", "basvuru_onaylandi");
+
+            basvuru.Durum = BasvuruDurumu.Onaylandi;
+            basvuru.KararVerenUserId = IstekYapanId();
+            basvuru.KararTarihi = DateTime.UtcNow;
+
+            // Tek SaveChanges: kullanıcı, başvuru ve denetim kaydı
+            // birlikte yazılıyor. Ya hepsi ya hiçbiri.
+            await _context.SaveChangesAsync();
+
+            // ⚠️ MAİL SaveChanges'TEN SONRA.
+            // Öncesinde gönderseydik ve kayıt patlasaydı, kullanıcıya
+            // "admin oldun" maili gitmiş ama olmamış olurdu.
+            // "Geri alınamaz yan etkiler, geri alınabilir olanların
+            // sonrasına konur."
+            await _email.GuvenliGonderAsync(
+                _log,
+                kullanici.Email,
+                _sablonlar.BasvuruOnaylandi(kullanici.FullName),
+                "BasvuruOnaylandi");
+
+            return Ok(new
+            {
+                mesaj = $"{kullanici.FullName} artık yönetici. Mevcut oturumları sonlandırıldı."
+            });
+        }
+
+
+        // 🟣 PUT /api/admin/basvurular/5/reddet
+        //
+        // Neden PUT, neden POST değil? Bu bir DURUM GEÇİŞİ, yeni bir
+        // kaynak oluşturma değil. Gövde taşıması sorun değil —
+        // gövdesi tanımsız olan HTTP metodu DELETE'tir, PUT değil.
+        [Authorize(Roles = "superadmin")]
+        [HttpPut("basvurular/{id}/reddet")]
+        public async Task<IActionResult> BasvuruReddet(int id, [FromBody] BasvuruRedDto dto)
+        {
+            var basvuru = await _context.AdminBasvurular.FindAsync(id);
+
+            if (basvuru == null)
+            {
+                return NotFound(new { mesaj = "Başvuru bulunamadı!" });
+            }
+
+            if (basvuru.Durum == BasvuruDurumu.Reddedildi)
+            {
+                return Ok(new { mesaj = "Bu başvuru zaten reddedilmiş." });
+            }
+
+            if (basvuru.Durum == BasvuruDurumu.Onaylandi)
+            {
+                return BadRequest(new
+                {
+                    mesaj = "Onaylanmış bir başvuru reddedilemez. Yetkiyi geri almak için kullanıcılar sayfasından rolü değiştir."
+                });
+            }
+
+            var kullanici = await _context.Users.FindAsync(basvuru.UserId);
+
+            basvuru.Durum = BasvuruDurumu.Reddedildi;
+            basvuru.RedNedeni = dto.RedNedeni.Trim();
+            basvuru.KararVerenUserId = IstekYapanId();
+            basvuru.KararTarihi = DateTime.UtcNow;
+
+            // Denetim kaydı: rol değişmediği için RolDegistirAsync
+            // kullanmıyoruz, sadece log yazıyoruz.
+            //
+            // Eski/yeni değer olarak durumu geçiyoruz — denetim
+            // ekranındaki "eski → yeni" sütunu anlamlı kalsın.
+            await LogEkle(
+                basvuru.UserId,
+                kullanici?.FullName ?? "Bilinmeyen",
+                "basvuru_reddedildi",
+                BasvuruDurumu.Beklemede,
+                BasvuruDurumu.Reddedildi);
+
+            await _context.SaveChangesAsync();
+
+            if (kullanici != null)
+            {
+                await _email.GuvenliGonderAsync(
+                    _log,
+                    kullanici.Email,
+                    _sablonlar.BasvuruReddedildi(kullanici.FullName, basvuru.RedNedeni),
+                    "BasvuruReddedildi");
+            }
+
+            return Ok(new { mesaj = "Başvuru reddedildi." });
         }
 
     }

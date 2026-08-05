@@ -34,6 +34,10 @@ namespace ETicaretAPI.Data
         public DbSet<Coupon> Coupons { get; set; }
         public DbSet<CouponUsage> CouponUsages { get; set; }
 
+        // ⭐ YENİ — admin olma başvuruları
+        public DbSet<AdminBasvuru> AdminBasvurular { get; set; }
+
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -216,6 +220,52 @@ namespace ETicaretAPI.Data
 
                 e.Property(s => s.Aciklama)
                  .HasMaxLength(300);
+            });
+
+            // ⭐ YENİ — ADMİN BAŞVURULARI
+            modelBuilder.Entity<AdminBasvuru>(e =>
+            {
+                // ⚠️ EN ÖNEMLİ KISIT — "AYNI ANDA TEK BEKLEYEN BAŞVURU"
+                //
+                // Bu kuralı kodda "önce sorgula, yoksa ekle" diye
+                // yazabilirdik. Ama iki istek aynı anda gelirse ikisi de
+                // "bekleyen yok" cevabı alır ve ikisi de kayıt açar.
+                // Kontrol ile yazma arasındaki o mikrosaniye her zaman
+                // vardır.
+                //
+                // FİLTRELİ UNIQUE INDEX bunu veritabanı seviyesinde
+                // imkânsız kılıyor: bir kullanıcının en fazla BİR tane
+                // "beklemede" satırı olabilir.
+                //
+                // Filtre neden şart? Filtresiz olsaydı kural "bir
+                // kullanıcının toplam bir başvurusu olur" haline gelirdi
+                // — reddedilen biri bir daha asla başvuramazdı.
+                // Karar verilince Durum değişiyor ve slot boşalıyor.
+                //
+                // Users.Email, Order.OrderNumber ve Order.IdempotencyKey'de
+                // uyguladığımız desenin aynısı: garantiyi kod değil
+                // veritabanı verir.
+                e.HasIndex(b => b.UserId)
+                 .IsUnique()
+                 .HasFilter("[Durum] = 'beklemede'");
+
+                // Liste ucu duruma göre filtreleyip tarihe göre sıralıyor.
+                // Kolon sırası önemli: önce eşitlik filtresi (Durum),
+                // sonra sıralama (CreatedAt).
+                e.HasIndex(b => new { b.Durum, b.CreatedAt });
+
+                e.Property(b => b.Gerekce)
+                 .HasMaxLength(1000)
+                 .IsRequired();
+
+                // nvarchar(max) kolonuna index kurulamaz — filtrede
+                // kullandığımız için uzunluk şart.
+                e.Property(b => b.Durum)
+                 .HasMaxLength(20)
+                 .IsRequired();
+
+                e.Property(b => b.RedNedeni)
+                 .HasMaxLength(500);
             });
 
             // ⭐ YENİ — REFRESH TOKEN yapılandırması

@@ -31,5 +31,23 @@ namespace ETicaretAPI.DTOs
         // da veritabanı istisna fırlatırdı — ikisi de kötü.
         [MaxLength(500, ErrorMessage = "Sipariş notu en fazla 500 karakter olabilir!")]
         public string? CustomerNote { get; set; }
+
+        // ⭐ YENİ — çift sipariş koruması anahtarı.
+        //
+        // Neden [Required] yok: anahtarsız istek geçerlidir, sadece
+        // korumasızdır. Zorunlu yapsaydık Postman'den test etmek ve
+        // ileride başka istemciler eklemek zorlaşırdı.
+        //
+        // Neden [MaxLength(64)]: AppDbContext'teki HasMaxLength(64)
+        // ile AYNI sayı olmalı. Farklı olsalardı ya DTO gereksiz yere
+        // reddederdi ya da veritabanı istisna fırlatırdı.
+        //
+        // ⚠️ Sınır aynı zamanda bir savunma: sınırsız metin kabul
+        // eden bir kolona index kurulu olduğu için, uzun değerler
+        // index'i şişirirdi.
+        [MaxLength(64, ErrorMessage = "Geçersiz istek anahtarı!")]
+        public string? IdempotencyKey { get; set; }
+
+
     }
 }

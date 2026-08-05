@@ -115,6 +115,39 @@ namespace ETicaretAPI.Data
                 .IsUnique();
 
 
+            // ⭐ YENİ — ÇİFT SİPARİŞ KORUMASI
+            //
+            // Bu index performans için DEĞİL, DOĞRULUK için.
+            // Kodda "bu anahtarla sipariş var mı?" diye kontrol
+            // ediyoruz ama iki istek aynı anda gelirse ikisi de
+            // "yok" cevabı alabilir. Kontrol ile yazma arasındaki
+            // o mikrosaniyeyi kapatan tek şey bu index.
+            //
+            // NEDEN BİLEŞİK (UserId + Anahtar)?
+            // Anahtarı İSTEMCİ üretiyor, biz değil. Sadece anahtara
+            // unique index koysaydık iki farklı kullanıcının anahtarı
+            // çakıştığında ikincisinin siparişi reddedilirdi.
+            // Kullanıcıyı index'e katınca çakışma imkânsız hale gelir.
+            //
+            // NEDEN FİLTRE?
+            // SQL Server'da unique index NULL'ları "birbirine eşit"
+            // sayar — filtresiz olsaydı anahtarsız İKİNCİ sipariş
+            // hata verirdi. Filtre sayesinde kural sadece anahtarı
+            // DOLU satırlar için işliyor. (Product.Barcode'da EF bunu
+            // otomatik yapmıştı; burada bileşik index olduğu için
+            // açıkça yazıyoruz — davranış tahmine bırakılmasın.)
+            modelBuilder.Entity<Order>()
+                .HasIndex(o => new { o.UserId, o.IdempotencyKey })
+                .IsUnique()
+                .HasFilter("[IdempotencyKey] IS NOT NULL");
+
+            // nvarchar(max) kolonuna index kurulamaz — uzunluk şart.
+            // 64 karakter, ürettiğimiz anahtarın iki katından fazla.
+            modelBuilder.Entity<Order>()
+                .Property(o => o.IdempotencyKey)
+                .HasMaxLength(64);
+
+
             // ⭐ YENİ — barkod benzersiz olsun (aynı barkod iki üründe olamaz).
             // Barcode nullable olduğu için EF, SQL Server'da bu index'e
             // otomatik "WHERE [Barcode] IS NOT NULL" filtresi ekler.

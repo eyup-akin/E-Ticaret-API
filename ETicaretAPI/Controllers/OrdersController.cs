@@ -155,6 +155,31 @@ namespace ETicaretAPI.Controllers
         }
 
 
+        // ⭐ YENİ — SİPARİŞ BAŞARI CEVABI
+        //
+        // Neden ayrı bir metot?
+        // Bu cevabı İKİ yerde döndürüyoruz: normal akışın sonunda ve
+        // "bu sipariş zaten vardı" durumunda. İki yere kopyalasaydık,
+        // yarın cevaba yeni bir alan eklendiğinde (örneğin kargo
+        // ücreti) birini güncelleyip diğerini unutmak işten değildi —
+        // ve bunu hiçbir hata mesajı söylemezdi.
+        //
+        // static: sınıfın hiçbir alanına dokunmuyor, saf bir dönüşüm.
+        private static object SiparisCevabi(Order o, string mesaj)
+        {
+            return new
+            {
+                mesaj = mesaj,
+                siparisId = o.Id,
+                siparisNo = o.OrderNumber,
+                araToplam = o.SubTotal,
+                indirim = o.DiscountAmount,
+                kuponKodu = o.CouponCode,
+                toplam = o.Total,
+                odemeDurumu = o.PaymentStatus
+            };
+        }
+
 
         // 🟡 POST /api/orders — sepetten sipariş oluştur + ödeme simüle et
         [HttpPost]
@@ -166,6 +191,47 @@ namespace ETicaretAPI.Controllers
             }
 
             var userId = GetUserId();
+
+            // ⭐ YENİ — ÇİFT SİPARİŞ ÖN KONTROLÜ
+            //
+            // "Değer yok" durumunu TEK bir şekilde temsil ediyoruz:
+            // NULL. Boş string gelirse de null'a çeviriyoruz, yoksa
+            // veritabanında "" değeri unique index'e girer ve ikinci
+            // boş istek çakışır.
+            var anahtar = string.IsNullOrWhiteSpace(dto.IdempotencyKey)
+                ? null
+                : dto.IdempotencyKey.Trim();
+
+            if (anahtar != null)
+            {
+                // ⚠️ SAHİPLİK KONTROLÜ SORGUYA DAHİL.
+                // Ayrı bir if olarak yazsaydık unutulabilirdi; burada
+                // unutmak imkânsız. Başkasının anahtarıyla istek atan
+                // biri asla o siparişi göremez.
+                //
+                // AsNoTracking: sadece okuyup döndüreceğiz, EF'in bu
+                // nesneyi takip etmesine gerek yok.
+                var mevcutSiparis = await _context.Orders
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(o => o.IdempotencyKey == anahtar
+                                           && o.UserId == userId);
+
+                if (mevcutSiparis != null)
+                {
+                    // ⚠️ 409 DEĞİL 200.
+                    // İdempotentliğin tanımı: aynı istek, aynı cevap.
+                    // Müşterinin siparişi VAR — ona hata göstermek
+                    // yanlış olurdu. Ekran normal akışına devam etsin.
+                    return Ok(SiparisCevabi(
+                        mevcutSiparis,
+                        "Bu sipariş zaten oluşturulmuştu."));
+                }
+
+                // ⚠️ Bu kontrol ucuz durumu ucuza halleder ama GARANTİ
+                //    DEĞİLDİR: iki istek aynı anda buraya girip ikisi
+                //    de "yok" cevabı alabilir. Garantiyi aşağıdaki
+                //    unique index + DbUpdateException yakalaması verir.
+            }
 
             // 1) Adres gerçekten bu kullanıcının mı?
             var adres = await _context.Addresses
@@ -640,6 +706,13 @@ namespace ETicaretAPI.Controllers
                     CustomerNote = string.IsNullOrWhiteSpace(dto.CustomerNote)
                         ? null
                         : dto.CustomerNote.Trim()
+                    ,
+
+                    // ⭐ YENİ — çift sipariş koruması anahtarı.
+                    // Anahtar gelmediyse null yazılır; o siparişte
+                    // koruma yoktur ama unique index'in filtresi
+                    // sayesinde başka bir soruna da yol açmaz.
+                    IdempotencyKey = anahtar
 
                 };
 
@@ -752,18 +825,54 @@ namespace ETicaretAPI.Controllers
                     "SiparisAlindi");
                 // ============================================================
 
-                return Ok(new
+                return Ok(SiparisCevabi(
+                    siparis,
+                    "Sipariş oluşturuldu ve ödeme alındı biladerim!"));
+            }
+
+            // ⭐ YENİ — ÇİFT SİPARİŞ: GERÇEK GARANTİ BURADA
+            //
+            // Ön kontrolü geçen iki eşzamanlı istek buraya düşer.
+            // İkisi de sipariş yazmaya çalışır, unique index birini
+            // reddeder ve SaveChangesAsync DbUpdateException fırlatır.
+            //
+            // ⚠️ Bu catch, genel catch'ten ÖNCE gelmek ZORUNDA.
+            //    C# catch bloklarını yukarıdan aşağı dener; genel
+            //    olan üstte olsaydı bu blok hiç çalışmazdı.
+            //
+            // "when (anahtar != null)": anahtarsız isteklerde bu
+            // istisna bizimle ilgili olamaz, genel catch'e bıraksın.
+            catch (DbUpdateException) when (anahtar != null)
+            {
+                await transaction.RollbackAsync();
+
+                // Rakip istek commit etti mi? Ona bakıyoruz.
+                //
+                // Sahiplik yine sorgunun içinde: başka bir kullanıcının
+                // siparişini asla döndürmeyiz.
+                var kazanan = await _context.Orders
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(o => o.IdempotencyKey == anahtar
+                                           && o.UserId == userId);
+
+                if (kazanan != null)
                 {
-                    mesaj = "Sipariş oluşturuldu ve ödeme alındı biladerim!",
-                    siparisId = siparis.Id,
-                    siparisNo = siparis.OrderNumber,
-                    araToplam = araToplam,           // ⭐
-                    indirim = indirimTutari,         // ⭐
-                    kuponKodu = kullanilanKod,       // ⭐
-                    toplam = toplamTutar,
-                    odemeDurumu = "odendi"
+                    // Bizim isteğimiz kaybetti ama müşteri açısından
+                    // hiçbir şey olmadı: siparişi var, cevabı alıyor.
+                    return Ok(SiparisCevabi(
+                        kazanan,
+                        "Bu sipariş zaten oluşturulmuştu."));
+                }
+
+                // Buraya düşersek istisna BAŞKA bir benzersizlik
+                // ihlalinden geldi (örneğin sipariş numarası). O zaman
+                // bu gerçek bir hatadır, gizlemiyoruz.
+                return StatusCode(500, new
+                {
+                    mesaj = "Sipariş oluşturulurken hata oldu, işlem geri alındı."
                 });
             }
+
             catch (Exception ex)
             {
                 // Bir şey patlarsa HER ŞEYİ geri al

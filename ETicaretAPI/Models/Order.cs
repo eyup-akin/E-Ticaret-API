@@ -117,5 +117,23 @@
         // sonradan değiştirilebilir olsa kargo çıktıktan sonra
         // değiştirilip "ben böyle yazmıştım" tartışması çıkardı.
         public string? CustomerNote { get; set; }
+
+        // ⭐ YENİ — ÇİFT SİPARİŞ KORUMASI (idempotency)
+        //
+        // Mobil, sipariş ekranı açılınca bir kere rastgele anahtar
+        // üretip her istekte aynısını gönderiyor. Aynı anahtarla
+        // ikinci bir sipariş oluşamaz.
+        //
+        // Neden nullable?
+        //   1) Bu alandan ÖNCE oluşmuş tüm siparişlerde değer yok —
+        //      nullable olmasa migration backfill isterdi ve geçmişe
+        //      uydurma anahtarlar yazmak zorunda kalırdık
+        //   2) Admin panelinden veya ileride başka bir kanaldan gelen
+        //      istekler anahtar göndermeyebilir; anahtarsız istek
+        //      geçerli bir istektir, sadece korumasızdır
+        //
+        // Benzersizliğini AppDbContext'teki (UserId, IdempotencyKey)
+        // bileşik unique index garanti eder.
+        public string? IdempotencyKey { get; set; }
     }
 }

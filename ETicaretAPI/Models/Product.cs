@@ -55,5 +55,40 @@
         // geçersiz kılmaz. Mesafeli satış sözleşmesinin kendisi
         // Aşama 10'da ayrıca saklanacak.
         public string? Description { get; set; }
-    }   
+
+        // ⭐ YENİ — KDV ORANI (yüzde olarak: 1, 10, 20)
+        //
+        // ⚠️ FİYAT KDV DAHİLDİR. Bu oran Price'ın ÜSTÜNE eklenmez,
+        // İÇİNDEN ayrıştırılır:
+        //
+        //     KDV = Fiyat × Oran / (100 + Oran)
+        //
+        // Türkiye'de tüketiciye gösterilen fiyatın tüm vergiler dahil
+        // nihai fiyat olması zorunlu. Fiyatın üstüne eklemek hem yasaya
+        // aykırı olurdu hem de sepette gösterilen tutarla ödenen tutarı
+        // ayrıştırırdı.
+        //
+        // NEDEN ÜRÜNE ÖZEL, NEDEN TEK GLOBAL ORAN DEĞİL?
+        // Türkiye'de yürürlükte üç oran var: %1 (temel gıda), %10
+        // (bazı gıda ve hizmetler), %20 (genel). Tek bir global oran
+        // kullansaydık gıda satan bir mağaza sistemi hiç kullanamazdı.
+        //
+        // NEDEN int, NEDEN decimal DEĞİL?
+        // Oranlar tam sayı. decimal yapmak "%20,5" gibi var olmayan
+        // bir esneklik vaat eder ve karşılaştırmalarda kuruş hatası
+        // riski açardı. Ayrıştırma hesabında zaten decimal'e yükseliyor.
+        //
+        // NEDEN nullable DEĞİL?
+        // Her ürünün bir KDV oranı vardır. "Bilinmiyor" diye bir durum
+        // yok — IsActive'deki gerekçenin aynısı.
+        //
+        // = 20 varsayılanı: yeni ürün genel orana düşer. Mevcut ürünler
+        // migration'da 20 ile dolduruluyor ve bu UYDURMA DEĞİL: bugüne
+        // kadar sistemde KDV hiç yoktu, hepsi fiilen genel orana tabiydi.
+        //
+        // ⚠️ OrderItem'a DONDURULUYOR — Description'ın aksine. Fark şu:
+        // açıklama pazarlama metnidir, KDV oranı ise faturanın parçasıdır.
+        // Oran yasayla değişirse eski faturaların bozulmaması gerekir.
+        public int VatRate { get; set; } = 20;
+    }
 }

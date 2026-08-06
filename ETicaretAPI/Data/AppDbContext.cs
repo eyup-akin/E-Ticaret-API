@@ -406,6 +406,23 @@ namespace ETicaretAPI.Data
                 .Property(o => o.DiscountAmount)
                 .HasPrecision(18, 2);
 
+            // ⭐ YENİ — kargo ücreti hassasiyeti.
+            //
+            // ⚠️ Bu satır Aşama 4.2'de atlanmıştı. Kolon yine de
+            // decimal(18,2) olarak oluştu — EF Core'un SQL Server
+            // varsayılanı bu — yani veride bir sorun YOK.
+            //
+            // Sorun şu: EF her migration'da "ShippingCost için tip
+            // belirtilmemiş, değerler sessizce kırpılabilir" uyarısı
+            // basıyordu. Zararsız bir uyarının sürekli görünmesi, bir
+            // gün çıkacak GERÇEK uyarıyı gürültüde kaybettirir.
+            //
+            // Projedeki diğer 12 para kolonu bunu açıkça bildiriyor;
+            // tek istisna olarak bırakmanın da bir gerekçesi yok.
+            modelBuilder.Entity<Order>()
+                .Property(o => o.ShippingCost)
+                .HasPrecision(18, 2);
+
 
             // ⭐ YENİ — KARGO VE NOT ALANLARININ UZUNLUK SINIRLARI
             //

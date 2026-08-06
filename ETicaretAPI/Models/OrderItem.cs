@@ -58,5 +58,37 @@
         //      üretirdi. Rapor "maliyet bilinmiyor" demeli, uydurulmuş
         //      bir kâr rakamı göstermemeli.
         public decimal? UnitCost { get; set; }
+
+        // ⭐ YENİ — DONDURULMUŞ KDV ORANI
+        //
+        // Sipariş anında Product.VatRate'ten kopyalanır.
+        //
+        // NEDEN DONDURULUYOR?
+        // KDV oranları YASAYLA değişir ve geçmişe dönük uygulanmaz.
+        // Oranı Product'tan canlı okusaydık, oran %20'den %10'a indiği
+        // gün geçmiş faturaların hepsi yeni oranı gösterirdi. Müşterinin
+        // elindeki fiş ile sistemdeki kayıt tutmazdı — ve bu bir muhasebe
+        // sorunudur, kozmetik bir tutarsızlık değil.
+        //
+        // UnitPrice, ProductName ve UnitCost ile aynı muamele.
+        //
+        // ⚠️ NEDEN nullable (int?) VE MIGRATION'DA DOLDURULMUYOR?
+        //
+        // Buradaki ayrım, ProductName (dolduruldu) ile UnitCost
+        // (doldurulmadı) arasındaki ayrımın aynısı:
+        //
+        //   Product.VatRate  → BUGÜN hakkında bir iddia. "Bu ürün genel
+        //                      orana tabi" demek güvenli, doğrulanabilir.
+        //   OrderItem.VatRate→ GEÇMİŞ hakkında bir iddia. O siparişte
+        //                      hangi oranın uygulandığını gerçekten
+        //                      BİLMİYORUZ — sistemde KDV kaydı yoktu.
+        //
+        // 0 yazsaydık ekranda "KDV (%0): 0,00 TL" çıkardı. Bu eksik bir
+        // bilgi değil, YANLIŞ bir bilgi olurdu — o siparişlerde KDV
+        // alınmadığını iddia ederdi. Null bırakınca eski siparişlerde
+        // KDV satırı hiç çizilmiyor.
+        //
+        // "Yanlış sayı, eksik sayıdan tehlikelidir."
+        public int? VatRate { get; set; }
     }
 }

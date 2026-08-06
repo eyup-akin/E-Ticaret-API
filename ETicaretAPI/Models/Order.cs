@@ -79,6 +79,29 @@
         // doğru: o siparişlerde kargo gerçekten alınmamıştı.
         public decimal ShippingCost { get; set; } = 0;
 
+        // ⭐ YENİ — DONDURULMUŞ KARGO KDV ORANI
+        //
+        // Kargo bir HİZMETTİR ve KDV'ye tabidir. ShippingCost da tıpkı
+        // ürün fiyatları gibi KDV DAHİL bir tutar; oran onun üstüne
+        // eklenmez, içinden ayrıştırılır.
+        //
+        // NEDEN AYRI BİR ALAN, NEDEN ÜRÜN ORANINI KULLANMIYORUZ?
+        // Sepette %1'lik gıda ile %20'lik elektronik birlikte olabilir —
+        // "siparişin KDV oranı" diye tek bir şey yok. Kargo kendi
+        // hizmetidir ve kendi oranına tabidir. Kalemlerden birinin
+        // oranını ödünç almak, sepetin içeriği değişince kargo KDV'sinin
+        // de değişmesi gibi saçma bir sonuç doğururdu.
+        //
+        // Değeri MagazaAyarlari.KargoKdvOrani'ndan sipariş anında
+        // kopyalanır. ShippingCost'un hemen yanında duruyor çünkü ikisi
+        // birlikte anlam taşıyor: tutar ve o tutarın vergi oranı.
+        //
+        // ⚠️ nullable ve migration'da DOLDURULMUYOR — OrderItem.VatRate
+        // ile aynı gerekçe. Eski siparişlerde hangi oranın uygulandığını
+        // bilmiyoruz; zaten kargo da alınmamıştı. 0 yazmak "KDV'siz kargo
+        // uygulandı" diye yanlış bir iddia olurdu.
+        public int? ShippingVatRate { get; set; }
+
    
         // Benzersizliğini AppDbContext'teki (UserId, IdempotencyKey)
         // bileşik unique index garanti eder.

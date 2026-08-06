@@ -46,6 +46,13 @@ namespace ETicaretAPI.Controllers
         // çağırmaları.
         private readonly SepetHesaplayici _hesaplayici;
 
+        // ⭐ YENİ — KDV ayrıştırma.
+        //
+        // ⚠️ Bu servis TOPLAMI DEĞİŞTİRMEZ. Fiyatlar KDV dahil olduğu
+        // için ödenecek tutar aynı kalıyor; burada üretilen sadece o
+        // tutarın dökümü. Toplamın tek kaynağı hâlâ _hesaplayici.
+        private readonly KdvHesaplayici _kdv;
+
         public OrdersController(
             AppDbContext context,
             IConfiguration config,
@@ -55,6 +62,7 @@ namespace ETicaretAPI.Controllers
             StokDefteri defter,
             MagazaAyarlari ayarlar,                       // ⭐ YENİ (4.1)
             SepetHesaplayici hesaplayici,                 // ⭐ YENİ (4.2)
+            KdvHesaplayici kdv,                           // ⭐ YENİ (4.3)
             ILogger<OrdersController> log)                // ⭐ YENİ
         {
             _context = context;
@@ -66,6 +74,41 @@ namespace ETicaretAPI.Controllers
             _defter = defter;
             _ayarlar = ayarlar;                           // ⭐ YENİ
             _hesaplayici = hesaplayici;                   // ⭐ YENİ
+            _kdv = kdv;                                   // ⭐ YENİ
+        }
+
+
+        // ⭐ YENİ — SİPARİŞİN KDV DÖKÜMÜNÜ ÜRETİR
+        //
+        // Neden ayrı bir private metot?
+        // Aynı döküm İKİ uçta gösteriliyor: müşterinin sipariş detayı
+        // (GetMyOrder) ve adminin sipariş detayı (GetOrderDetail).
+        // İki yere kopyalasaydık, yarın kargo KDV'sinin dahil edilme
+        // kuralı değiştiğinde birini güncelleyip diğerini unutmak işten
+        // değildi — SiparisCevabi metodunda tam olarak bunu yaşamıştık.
+        //
+        // ⚠️ KALEM TUTARI = UnitPrice × Quantity, KDV DAHİL.
+        // Ayrıştırma bu tutarın İÇİNDEN yapılıyor, üstüne eklenmiyor.
+        //
+        // ⚠️ KARGO DA DÖKÜME GİRİYOR (karar K1): kargo bir hizmettir ve
+        // KDV'ye tabidir. Oranı kalemlerden bağımsız — sepette %1 gıda
+        // ile %20 elektronik birlikte olabilir, kargonun kendi oranı var.
+        private KdvOzeti SiparisKdvDokumu(Order order, List<OrderItem> kalemler)
+        {
+            var parcalar = kalemler
+                .Select(k => (Tutar: k.UnitPrice * k.Quantity, Oran: k.VatRate))
+                .ToList();
+
+            // Kargo ücretsizse ShippingVatRate zaten null yazılmış
+            // olur ve Ozetle onu atlar. Yine de sıfır tutarlı bir kalem
+            // eklememek için burada da kontrol ediyoruz — 0 TL'lik bir
+            // satırın döküme girmesi kimseye bir şey anlatmaz.
+            if (order.ShippingCost > 0)
+            {
+                parcalar.Add((order.ShippingCost, order.ShippingVatRate));
+            }
+
+            return _kdv.Ozetle(parcalar);
         }
 
         private int GetUserId()
@@ -520,7 +563,19 @@ namespace ETicaretAPI.Controllers
                         // Bu satır kâr raporunun temelidir: rapor
                         // Products tablosuna HİÇ bakmayacak, sadece
                         // buradaki donmuş değeri kullanacak.
-                        UnitCost = urun.Cost
+                        UnitCost = urun.Cost,
+
+                        // ⭐ YENİ — o anki KDV oranı.
+                        //
+                        // KDV oranları YASAYLA değişir ve geçmişe dönük
+                        // uygulanmaz. Oranı Product'tan canlı okusaydık,
+                        // oran %20'den %10'a indiği gün geçmiş faturaların
+                        // hepsi yeni oranı gösterirdi — müşterinin elindeki
+                        // fiş ile sistemdeki kayıt tutmazdı.
+                        //
+                        // UnitPrice, ProductName ve UnitCost ile aynı
+                        // muamele: dondurulmuş kayıt yarı canlı olmamalı.
+                        VatRate = urun.VatRate
                     });
 
                     toplamTutar += urun.Price * adet;
@@ -755,6 +810,21 @@ namespace ETicaretAPI.Controllers
                     // kayda geçerdik — Total 600 ama ShippingCost 49,90
                     // yazardı ve ikisi birbirini tutmazdı.
                     ShippingCost = ozet.KargoUcreti,
+
+                    // ⭐ YENİ — KARGO KDV ORANI (dondurulmuş)
+                    //
+                    // ⚠️ KARGO ÜCRETSİZSE ORAN DA YAZILMIYOR.
+                    //
+                    // 0 TL'lik bir kargonun KDV oranı diye bir şey yok.
+                    // %20 yazsaydık ekranda "Kargo KDV (%20): 0,00 TL"
+                    // gibi anlamsız bir satır çıkardı — matematiksel
+                    // olarak doğru ama bilgi taşımayan bir satır.
+                    //
+                    // null bırakınca KdvHesaplayici o kalemi döküme hiç
+                    // katmıyor ve satır çizilmiyor.
+                    ShippingVatRate = ozet.KargoUcreti > 0
+                        ? _ayarlar.KargoKdvOrani
+                        : (int?)null,
 
                     // ⭐ YENİ — MÜŞTERİ NOTU
                     //
@@ -1033,17 +1103,28 @@ namespace ETicaretAPI.Controllers
                 return NotFound(new { mesaj = "Sipariş bulunamadı!" });
             }
 
-            // ⭐ DEĞİŞTİ — JOIN kaldırıldı, donmuş ad okunuyor.
-            var items = await _context.OrderItems
+            // ⭐ DEĞİŞTİ — artık DTO'ya değil ENTITY'ye çekiyoruz.
+            //
+            // Sebep: KDV dökümü kalemlerin oranına ihtiyaç duyuyor ve
+            // aynı veriyi ikinci bir sorguyla çekmenin anlamı yok.
+            // Projeksiyon aşağıda, bellekte yapılıyor.
+            var kalemler = await _context.OrderItems
                 .Where(oi => oi.OrderId == id)
+                .ToListAsync();
+
+            var items = kalemler
                 .Select(oi => new OrderItemDto
                 {
                     ProductId = oi.ProductId,
                     ProductName = oi.ProductName,
                     Quantity = oi.Quantity,
-                    UnitPrice = oi.UnitPrice
+                    UnitPrice = oi.UnitPrice,
+                    VatRate = oi.VatRate          // ⭐ YENİ
                 })
-                .ToListAsync();
+                .ToList();
+
+            // ⭐ YENİ — KDV dökümü (kargo dahil).
+            var kdvOzeti = SiparisKdvDokumu(order, kalemler);
 
             var dto = new OrderDto
             {
@@ -1080,7 +1161,26 @@ namespace ETicaretAPI.Controllers
                 DeliveredAt = order.DeliveredAt,
                 CustomerNote = order.CustomerNote,
 
-                Items = items
+                Items = items,
+
+                // ⭐ YENİ — KDV dökümü.
+                //
+                // ⚠️ Total'a hiçbir şey EKLEMİYOR. Fiyatlar KDV dahil
+                // olduğu için Total zaten nihai tutar; bunlar onun
+                // içinden ayrıştırılmış bilgilendirme değerleri.
+                VatLines = kdvOzeti.Satirlar
+                    .Select(s => new VatLineDto
+                    {
+                        Rate = s.Oran,
+                        NetAmount = s.Matrah,
+                        VatAmount = s.Vergi,
+                        GrossAmount = s.DahilTutar
+                    })
+                    .ToList(),
+
+                TotalVatBase = kdvOzeti.ToplamMatrah,
+                TotalVat = kdvOzeti.ToplamVergi,
+                HasVatBreakdown = kdvOzeti.DokumVarMi
             };
 
             return Ok(dto);
@@ -1444,17 +1544,27 @@ namespace ETicaretAPI.Controllers
             // detayı ekranı satış bilgisi gösterir, kâr analizi
             // Raporlar sayfasının işi. Aynı veriyi her ekrana serpmek
             // ekranların amacını bulanıklaştırır.
-            var kalemler = await _context.OrderItems
+            // ⭐ DEĞİŞTİ — önce entity, sonra projeksiyon.
+            // KDV dökümü kalem oranlarına ihtiyaç duyuyor; aynı veriyi
+            // ikinci bir sorguyla çekmenin anlamı yok.
+            var kalemEntityleri = await _context.OrderItems
                 .Where(oi => oi.OrderId == id)
+                .ToListAsync();
+
+            var kalemler = kalemEntityleri
                 .Select(oi => new
                 {
                     urunId = oi.ProductId,
                     urunAdi = oi.ProductName,
                     adet = oi.Quantity,
                     birimFiyat = oi.UnitPrice,
-                    araToplam = oi.Quantity * oi.UnitPrice
+                    araToplam = oi.Quantity * oi.UnitPrice,
+                    kdvOrani = oi.VatRate          // ⭐ YENİ
                 })
-                .ToListAsync();
+                .ToList();
+
+            // ⭐ YENİ — KDV dökümü (kargo dahil).
+            var kdvOzeti = SiparisKdvDokumu(order, kalemEntityleri);
 
             var odeme = await _context.Payments
                 .Where(p => p.OrderId == id)
@@ -1495,6 +1605,30 @@ namespace ETicaretAPI.Controllers
                 // tutarlı olmak, projeye tek bir global kural
                 // dayatmaktan önemli.
                 kargoUcreti = order.ShippingCost,
+
+                // ⭐ YENİ — KDV DÖKÜMÜ
+                //
+                // ⚠️ "tutar" alanına hiçbir şey EKLEMİYOR. Fiyatlar KDV
+                // dahil olduğu için tutar zaten nihai; bunlar onun
+                // içinden ayrıştırılmış bilgilendirme değerleri.
+                //
+                // varMi false ise panel bu bölümü hiç çizmeyecek —
+                // eski siparişlerde oran bilinmiyor ve "KDV: 0,00 TL"
+                // yazmak eksik değil YANLIŞ bilgi olurdu.
+                kdv = new
+                {
+                    varMi = kdvOzeti.DokumVarMi,
+                    toplamMatrah = kdvOzeti.ToplamMatrah,
+                    toplamVergi = kdvOzeti.ToplamVergi,
+
+                    satirlar = kdvOzeti.Satirlar.Select(s => new
+                    {
+                        oran = s.Oran,
+                        matrah = s.Matrah,
+                        vergi = s.Vergi,
+                        dahilTutar = s.DahilTutar
+                    })
+                },
 
                 durum = order.Status,
                 odemeDurumu = order.PaymentStatus,

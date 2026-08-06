@@ -82,12 +82,34 @@
         public decimal UcretsizKargoLimiti =>
             Ondalik("UcretsizKargoLimiti", varsayilan: 0m, enAz: 0m);
 
-        // ---------- KDV (4.3'te kullanılacak) ----------
+        // ---------- KDV ----------
 
         // Türkiye'de yürürlükteki oranlar: %1, %10, %20.
         // 0-100 aralığı dışına çıkmasını engelliyoruz.
         public int KdvVarsayilanOran =>
             TamSayi("KdvVarsayilanOran", varsayilan: 20, enAz: 0, enFazla: 100);
+
+        // ⭐ YENİ — KARGO HİZMETİNİN KDV ORANI
+        //
+        // Kargo bir hizmettir ve KDV'ye tabidir. KargoUcreti de tıpkı
+        // ürün fiyatları gibi KDV DAHİL bir tutar; bu oran onun üstüne
+        // eklenmez, içinden ayrıştırılır.
+        //
+        // ⚠️ NEDEN KdvVarsayilanOran'DAN AYRI?
+        //
+        // İkisi aynı sayı (20) olsa da FARKLI SORULARIN cevabı:
+        //   KdvVarsayilanOran → "yeni eklenen ÜRÜN hangi orana düşsün"
+        //   KargoKdvOrani     → "KARGO hizmeti hangi orana tabi"
+        //
+        // Ürün varsayılanı mağazanın ne sattığına göre değişir (gıda
+        // satan bir mağaza bunu 1 yapar). Kargonun oranı ise mağazanın
+        // ne sattığından bağımsızdır. Tek ayara bağlasaydık, gıda
+        // mağazası ürün varsayılanını 1'e çektiğinde kargo da sessizce
+        // %1'e düşerdi — ve bu vergi hatası olurdu.
+        //
+        // "Aynı değere sahip olmak, aynı şey olmak demek değildir."
+        public int KargoKdvOrani =>
+            TamSayi("KargoKdvOrani", varsayilan: 20, enAz: 0, enFazla: 100);
 
 
         // ==========================================================

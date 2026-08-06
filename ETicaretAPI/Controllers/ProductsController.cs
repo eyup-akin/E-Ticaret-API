@@ -348,7 +348,8 @@ namespace ETicaretAPI.Controllers
                     CategoryId = p.CategoryId,
                     Barcode = p.Barcode,
                     Cost = p.Cost,
-                    IsActive = p.IsActive       // ⭐ YENİ
+                    IsActive = p.IsActive,      // ⭐ YENİ
+                    VatRate = p.VatRate         // ⭐ YENİ
                 })
                 .ToListAsync();
 
@@ -416,7 +417,11 @@ namespace ETicaretAPI.Controllers
                 //
                 // GetProducts (liste ucu) bu alanı bilerek atlıyor;
                 // orada null gidiyor ve mobil de zaten kullanmıyor.
-                Description = product.Description
+                Description = product.Description,
+
+                // ⭐ YENİ — KDV oranı. Liste ucunda da dolu geliyor
+                // (Description'ın aksine) — tek int, veri yükü yok.
+                VatRate = product.VatRate
             };
 
             await ResimleriDoldur(new List<ProductDto> { dto });
@@ -641,7 +646,15 @@ namespace ETicaretAPI.Controllers
                 // yazarsak boş string'ler o listeye düşmesin.
                 Description = string.IsNullOrWhiteSpace(dto.Description)
                     ? null
-                    : dto.Description.Trim()
+                    : dto.Description.Trim(),
+
+                // ⭐ YENİ — KDV oranı.
+                //
+                // Doğrulaması DTO'daki [KdvOraniGecerli] özniteliğinde
+                // yapılıyor; buraya sadece geçerli oranlar ulaşabiliyor.
+                // Burada ikinci bir kontrol yazmak, kuralın iki yerde
+                // yaşaması demek olurdu.
+                VatRate = dto.VatRate
 
             };
 
@@ -742,6 +755,14 @@ namespace ETicaretAPI.Controllers
             product.Description = string.IsNullOrWhiteSpace(dto.Description)
                 ? null
                 : dto.Description.Trim();
+
+            // ⭐ YENİ — KDV oranı.
+            //
+            // ⚠️ Bu değişiklik GEÇMİŞ SİPARİŞLERİ ETKİLEMEZ. Oran
+            // sipariş anında OrderItem'a kopyalanıyor; buradaki
+            // güncelleme yalnızca bundan SONRAKİ siparişler için
+            // geçerli. Dondurma deseninin tam olarak var oluş sebebi.
+            product.VatRate = dto.VatRate;
 
             // ⭐ YENİ — DEFTERE FARK KAYDI
             //

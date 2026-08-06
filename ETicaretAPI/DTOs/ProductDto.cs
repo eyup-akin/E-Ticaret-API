@@ -52,5 +52,23 @@
 
 
         public int FavoriteCount { get; set; }
+
+        // ⭐ YENİ — KDV oranı (%).
+        //
+        // ⚠️ NEDEN MÜŞTERİYE DE GÖNDERİLİYOR?
+        //
+        // Cost'u gizliyoruz çünkü ticari sır. KDV oranı ise tam tersi:
+        // faturada zaten yazması gereken, yasal olarak açık bir bilgi.
+        // Gizlemenin koruduğu bir şey yok.
+        //
+        // ⚠️ Fiyat KDV DAHİL olduğu için mobil bu alanı fiyat
+        // hesabında KULLANMAZ. Yalnızca gösterim için — ve şu an
+        // hiçbir müşteri ekranı göstermiyor. Asıl tüketicisi admin
+        // paneli: ürün formundaki oran seçici.
+        //
+        // Liste ucunda da dolu geliyor (Description'ın aksine): tek bir
+        // int, veri yükü yok denecek kadar az. Kural "her şeyi kes"
+        // değil, "maliyeti faydasından büyük olanı kes".
+        public int VatRate { get; set; }
     }
 }

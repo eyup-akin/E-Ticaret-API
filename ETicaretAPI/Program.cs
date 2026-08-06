@@ -93,6 +93,16 @@ builder.Services.AddSingleton<ETicaretAPI.Services.MagazaAyarlari>();
 // (o da singleton). DbContext almadığı için güvenle paylaşılabilir.
 builder.Services.AddSingleton<ETicaretAPI.Services.SepetHesaplayici>();
 
+// ⭐ YENİ — KDV ayrıştırma.
+//
+// Singleton ve SepetHesaplayici'den bile "daha saf": ayarlara bile
+// bakmıyor, oranı çağıran veriyor. Tamamen girdi-çıktı bir sınıf.
+//
+// ⚠️ Bu servis TOPLAM ÜRETMEZ. Fiyatlar KDV dahil olduğu için toplam
+// değişmiyor; burada üretilen sadece o toplamın dökümü. Ödenecek
+// tutarın tek kaynağı SepetHesaplayici'dir ve öyle kalmalı.
+builder.Services.AddSingleton<ETicaretAPI.Services.KdvHesaplayici>();
+
 
 // ⭐ YENİ — dış URL'lerden resim indirebilmek için HttpClient fabrikası
 builder.Services.AddHttpClient();

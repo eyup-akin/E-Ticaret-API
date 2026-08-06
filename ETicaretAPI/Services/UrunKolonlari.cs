@@ -79,6 +79,18 @@
             },
             new UrunKolonu
             {
+                BaslikAdi = "KDV Oranı",
+                KabulEdilenAdlar = new[]
+                {
+                    "kdv orani", "kdv oranı", "kdv", "vat", "vatrate", "vat rate"
+                },
+                Zorunlu = false,
+                Aciklama = "KDV oranı: 1, 10 veya 20 (isteğe bağlı). " +
+                           "Boşsa 20 kabul edilir. Fiyat KDV DAHİL girilmelidir.",
+                OrnekDeger = "20"
+            },
+            new UrunKolonu
+            {
                 BaslikAdi = "Açıklama",
                 KabulEdilenAdlar = new[]
                 {

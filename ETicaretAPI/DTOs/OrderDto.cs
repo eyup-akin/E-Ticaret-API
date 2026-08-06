@@ -49,6 +49,55 @@ namespace ETicaretAPI.DTOs
         public string? CustomerNote { get; set; }
 
         public List<OrderItemDto> Items { get; set; } = new List<OrderItemDto>();
+
+        // ⭐ YENİ — KDV DÖKÜMÜ
+        //
+        // ⚠️ BU ALANLAR TOPLAMA HİÇBİR ŞEY EKLEMEZ.
+        //
+        // Fiyatlar KDV dahil olduğu için Total zaten nihai tutar.
+        // Buradaki değerler o tutarın İÇİNDEN ayrıştırılmış hali —
+        // bilgilendirme amaçlı. Mobil bunları toplama katmamalı.
+        //
+        // Boş liste, dökümün gösterilmemesi gerektiği anlamına gelir
+        // (bkz. HasVatBreakdown).
+        public List<VatLineDto> VatLines { get; set; } = new List<VatLineDto>();
+
+        public decimal TotalVatBase { get; set; }
+        public decimal TotalVat { get; set; }
+
+        // Döküm gösterilebilir mi?
+        //
+        // ⚠️ Bu alan neden var, neden ekran "VatLines.Count > 0" demiyor?
+        //
+        // KDV oranları bu özellik eklenmeden ÖNCEKİ siparişlerde null.
+        // O siparişlerde hangi oranın uygulandığını bilmiyoruz ve KDV
+        // satırı hiç çizilmemeli.
+        //
+        // Kararı sunucuda verip tek bir bool olarak göndermek, üç
+        // ekranın aynı koşulu ayrı ayrı yazmasından güvenli: biri
+        // yanlış yazarsa eski siparişte "KDV: 0,00 TL" görünür — yani
+        // eksik değil YANLIŞ bilgi.
+        public bool HasVatBreakdown { get; set; }
+    }
+
+    // ⭐ YENİ — tek bir KDV oranına ait satır.
+    //
+    // Neden liste? Bir sepette %1'lik gıda ile %20'lik elektronik
+    // birlikte olabilir. "Siparişin KDV oranı" diye tek bir şey yok;
+    // fatura oran bazında kesilir.
+    public class VatLineDto
+    {
+        // Yüzde olarak oran (1, 10, 20)
+        public int Rate { get; set; }
+
+        // KDV hariç tutar
+        public decimal NetAmount { get; set; }
+
+        // Verginin kendisi
+        public decimal VatAmount { get; set; }
+
+        // KDV dahil tutar (NetAmount + VatAmount)
+        public decimal GrossAmount { get; set; }
     }
 
     public class OrderItemDto
@@ -57,5 +106,11 @@ namespace ETicaretAPI.DTOs
         public string ProductName { get; set; }
         public int Quantity { get; set; }
         public decimal UnitPrice { get; set; }
+
+        // ⭐ YENİ — o kalemin dondurulmuş KDV oranı.
+        //
+        // Nullable: bu alan eklenmeden önceki kalemlerde boş.
+        // Ekran null ise oran bilgisini hiç göstermez.
+        public int? VatRate { get; set; }
     }
 }

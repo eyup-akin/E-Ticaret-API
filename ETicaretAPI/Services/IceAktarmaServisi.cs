@@ -106,6 +106,7 @@ namespace ETicaretAPI.Services
                 var stokSutun = KolonBul("Stok");
 
                 var aciklamaSutun = KolonBul("Açıklama");   // ⭐ YENİ
+                var kdvSutun = KolonBul("KDV Oranı");       // ⭐ YENİ
 
                 var resimSutun = KolonBul("Resim");
 
@@ -233,6 +234,37 @@ namespace ETicaretAPI.Services
                         }
                     }
 
+                    // ⭐ YENİ — KDV oranı (isteğe bağlı)
+                    //
+                    // ⚠️ GEÇERSİZ ORAN SATIRI DÜŞÜRMÜYOR, 20'YE ÇEKİYOR.
+                    //
+                    // Kontrollü bir tercih. Excel'e "%20" veya "0,20"
+                    // yazmak çok sık yapılan bir hata ve bunun yüzünden
+                    // 500 satırlık bir yüklemenin reddedilmesi orantısız
+                    // olurdu.
+                    //
+                    // Peki neden sessizce 20 yazmak "yanlış sayı üretmek"
+                    // sayılmıyor? Çünkü 20 zaten sistemin varsayılanı ve
+                    // sütun İSTEĞE BAĞLI — boş bırakan kullanıcı da 20
+                    // alıyor. Yani "tanınmayan değer" ile "hiç yazılmamış"
+                    // aynı sonuca çıkıyor, sürpriz yok.
+                    //
+                    // ⚠️ Buradaki geçerli oran listesi
+                    // ProductCreateDto'daki [KdvOraniGecerli] ile AYNI
+                    // olmalı. İkisi ayrışırsa panelden reddedilen bir
+                    // oran Excel'den geçebilir hale gelir.
+                    int kdvOrani = 20;
+
+                    if (kdvSutun != null)
+                    {
+                        var hamKdv = IntOku(satir.Cell(kdvSutun.Value));
+
+                        if (hamKdv == 1 || hamKdv == 10 || hamKdv == 20)
+                        {
+                            kdvOrani = hamKdv;
+                        }
+                    }
+
                     // --- Kategori: yoksa oluştur ---
                     var kategoriAnahtar = kategoriAdi.ToLower();
                     int kategoriId;
@@ -261,7 +293,8 @@ namespace ETicaretAPI.Services
                         Stock = stok,
                         CategoryId = kategoriId,
                         
-                        Description = aciklama   // ⭐ YENİ
+                        Description = aciklama,  // ⭐ YENİ
+                        VatRate = kdvOrani       // ⭐ YENİ
                     };
 
                     _context.Products.Add(urun);

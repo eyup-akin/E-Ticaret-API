@@ -50,5 +50,70 @@ namespace ETicaretAPI.DTOs
         // ham bir SQL istisnası patlardı.
         [MaxLength(2000, ErrorMessage = "Açıklama en fazla 2000 karakter olabilir!")]
         public string? Description { get; set; }
+
+        // ⭐ YENİ — KDV ORANI (%)
+        //
+        // ⚠️ NEDEN [Range(0, 100)] DEĞİL, BEYAZ LİSTE?
+        //
+        // Range her ara değeri kabul ederdi: %7, %13, %99... Bunlar
+        // Türkiye'de geçerli oranlar DEĞİL. Yanlış oranla kesilmiş
+        // fatura, hesap hatası değil VERGİ HATASIDIR.
+        //
+        // Doğrulama SUNUCUDA yapılıyor. Panelin açılır menü göstermesi
+        // yetmez — istek Postman'den, mobilden, betikten de gelebilir.
+        // "Beyaz liste doğrulaması sunucuda yapılır."
+        //
+        // ⚠️ NEDEN = 20 VARSAYILANI KRİTİK?
+        //
+        // IsActive'deki gerekçenin aynısı: bu bir girdi DTO'su ve admin
+        // paneli henüz güncellenmediği için gönderdiği JSON'da vatRate
+        // alanı YOK. JSON'da olmayan alan C# başlangıç değerinde kalır.
+        // Varsayılanı 0 bıraksaydık panelden kaydedilen HER ürün
+        // sessizce %0 KDV'ye düşerdi — ve doğrulama da onu reddederdi,
+        // yani panel tamamen çalışmaz hale gelirdi.
+        [KdvOraniGecerli]
+        public int VatRate { get; set; } = 20;
+    }
+
+
+    // ⭐ YENİ — KDV oranı beyaz liste doğrulayıcısı.
+    //
+    // ⚠️ NEDEN ÖZEL BİR ÖZNİTELİK, NEDEN CONTROLLER'DA if DEĞİL?
+    //
+    // Bu kural İKİ yerde gerekiyor: ürün ekleme ve ürün güncelleme
+    // (ikisi de ProductCreateDto kullanıyor). Ayrıca ileride Excel
+    // içe aktarma da aynı kontrolü yapacak.
+    //
+    // Controller'da if olarak yazsaydık, ModelState akışının dışında
+    // kalırdı: hata mesajı diğer doğrulama hatalarından farklı bir
+    // biçimde dönerdi ve ön yüzün iki ayrı hata formatı işlemesi
+    // gerekirdi.
+    //
+    // Öznitelik olarak yazınca [ApiController] bunu otomatik yakalıyor
+    // ve diğer tüm doğrulama hatalarıyla aynı zarfta döndürüyor.
+    public class KdvOraniGecerliAttribute : ValidationAttribute
+    {
+        // Türkiye'de yürürlükteki KDV oranları.
+        //
+        // ⚠️ Oranlar yasayla değişir. Değiştiği gün burası güncellenir
+        // ve ESKİ SİPARİŞLER ETKİLENMEZ — çünkü oran OrderItem'a
+        // dondurulmuş durumda. Dondurmasaydık, bu diziden bir oranı
+        // çıkardığımız an geçmiş faturalar geçersiz hale gelirdi.
+        private static readonly int[] GecerliOranlar = { 1, 10, 20 };
+
+        public override bool IsValid(object? value)
+        {
+            if (value is not int oran)
+            {
+                return false;
+            }
+
+            return GecerliOranlar.Contains(oran);
+        }
+
+        public override string FormatErrorMessage(string name)
+        {
+            return "KDV oranı yalnızca %1, %10 veya %20 olabilir!";
+        }
     }
 }

@@ -153,7 +153,44 @@ namespace ETicaretAPI.Controllers
                     //
                     // Bunun yerine "bilinmiyor" diyeceğiz. Yanlış sayı,
                     // eksik sayıdan tehlikelidir.
-                    maliyetBilinmeyen = g.Count(x => x.UnitCost == null)
+                    maliyetBilinmeyen = g.Count(x => x.UnitCost == null),
+
+                    // ⭐ YENİ — DEVLETE ÖDENEN NET KDV
+                    //
+                    // ⚠️ NEDEN KÂRDAN DÜŞÜLMESİ GEREKİYOR?
+                    //
+                    // Fiyat ve maliyetin İKİSİ de KDV dahil. Mağaza
+                    // satışta topladığı KDV'yi devlete öder, alışta
+                    // ödediğini indirir. Aradaki fark mağazanın cebinden
+                    // çıkar — yani kâr değildir.
+                    //
+                    //   net KDV = satış KDV'si − alış KDV'si
+                    //           = (fiyat − maliyet) × oran / (100 + oran)
+                    //
+                    // Örnek: 1.200 fiyat, 800 maliyet, %20.
+                    //   Eski hesap : 1200 − 800 = 400 TL kâr
+                    //   Gerçek     : 400 − 66,67 = 333,33 TL kâr
+                    //
+                    // Eski hesap kârı %20 fazla gösteriyordu.
+                    //
+                    // ⚠️ ORAN KALEM BAZINDA OKUNUYOR, grup bazında
+                    // değil. Aynı ürünün oranı zaman içinde değişmiş
+                    // olabilir (yasa değişikliği) ve her kalem kendi
+                    // dondurulmuş oranını taşıyor. Gruptan tek bir oran
+                    // seçseydik, oran değişmiş ürünlerde hesap kayardı.
+                    //
+                    // ⚠️ ALIŞ KDV ORANI = SATIŞ KDV ORANI VARSAYIMI.
+                    // Modelde ürün başına tek bir oran var. Gerçekte
+                    // %20'den alıp %1'den satmak mümkün (gıda); o durumda
+                    // bu hesap sapar. Ayrı bir "alış KDV oranı" alanı
+                    // eklemek gerekirdi — şimdilik kapsam dışı.
+                    kdvBilinmeyen = g.Count(x => x.VatRate == null),
+
+                    netKdv = g.Sum(x =>
+                        x.VatRate.HasValue && x.UnitCost.HasValue
+                            ? (x.Quantity * x.UnitPrice - x.Quantity * x.UnitCost.Value)
+                              * x.VatRate.Value / (100m + x.VatRate.Value)
+                            : 0m)
                 })
                 .OrderByDescending(x => x.ciro)
                 .Take(50)
@@ -167,17 +204,52 @@ namespace ETicaretAPI.Controllers
             // maliyeti sıfıra yakın.
             var satirlar = ham.Select(x =>
             {
-                // Maliyeti eksik olan varsa kâr HESAPLANMAZ.
+                // ⭐ DEĞİŞTİ — kâr için ARTIK İKİ ŞART var.
+                //
+                // Maliyet bilinmiyorsa kâr hesaplanamaz (eskiden de
+                // böyleydi). Artık KDV oranı bilinmiyorsa da
+                // hesaplanamaz: oranı bilmeden devlete ne kadar
+                // ödendiğini bilemeyiz.
+                //
+                // ⚠️ Bu, KDV alanı eklenmeden ÖNCEKİ tüm sipariş
+                // kalemlerini "kârı bilinmiyor" yapar. Sert görünüyor
+                // ama alternatifi %20 varsayıp uydurma bir kâr rakamı
+                // üretmekti. Rapor dürüst olmalı.
                 bool maliyetTam = x.maliyetBilinmeyen == 0;
+                bool kdvTam = x.kdvBilinmeyen == 0;
+                bool hesaplanabilir = maliyetTam && kdvTam;
 
-                decimal? kar = maliyetTam ? x.ciro - x.maliyet : null;
+                decimal? netKdv = hesaplanabilir
+                    ? Math.Round(x.netKdv, 2, MidpointRounding.AwayFromZero)
+                    : null;
+
+                // ⚠️ KÂR ARTIK KDV'Yİ DE DÜŞÜYOR.
+                //
+                //     kâr = ciro − maliyet − net KDV
+                //
+                // Üç sayı da cevapta gönderiliyor ki panelde hesap
+                // GÖZLE DOĞRULANABİLSİN. Sadece kârı gönderseydik,
+                // rakam değiştiğinde "neden düştü?" sorusunun cevabı
+                // ekranda olmazdı.
+                decimal? kar = hesaplanabilir
+                    ? x.ciro - x.maliyet - netKdv!.Value
+                    : null;
 
                 // Marj = kâr / ciro × 100
+                //
+                // ⚠️ PAYDA KDV DAHİL CİRO — bilinçli.
+                //
+                // Saf muhasebede marj, KDV hariç ciroya bölünür. Burada
+                // KDV dahil ciroyu kullanıyoruz çünkü bu sütun ürünleri
+                // BİRBİRİYLE KIYASLAMAK için var, mutlak bir muhasebe
+                // rakamı olarak değil. Tüm satırlarda aynı payda
+                // kullanıldığı için sıralama doğru kalıyor; sadece
+                // rakam bir miktar muhafazakâr çıkıyor.
                 //
                 // ⚠️ ciro 0 olabilir mi? Teorik olarak evet (fiyatı 0
                 // olan ürün). Sıfıra bölme çalışma zamanı hatası
                 // fırlatır — kontrol şart.
-                decimal? marj = (maliyetTam && x.ciro > 0)
+                decimal? marj = (hesaplanabilir && x.ciro > 0)
                     ? Math.Round(kar!.Value / x.ciro * 100, 1)
                     : null;
 
@@ -188,13 +260,25 @@ namespace ETicaretAPI.Controllers
                     x.adet,
                     x.ciro,
                     maliyet = maliyetTam ? x.maliyet : (decimal?)null,
+
+                    // ⭐ YENİ — devlete ödenen net KDV.
+                    // Panel bunu ayrı bir sütunda gösterecek ki
+                    // ciro − maliyet − kdv = kâr eşitliği görünsün.
+                    kdv = netKdv,
+
                     kar,
                     marj,
 
                     // Ön yüz bu bayrağa bakıp "—" veya uyarı ikonu
                     // gösterecek. Boş hücre "veri yok" mu "sıfır" mı
                     // belli olmaz; açık bir bayrak belirsizliği kaldırır.
-                    maliyetEksik = !maliyetTam
+                    maliyetEksik = !maliyetTam,
+
+                    // ⭐ YENİ — KDV oranı bilinmeyen kalem var mı?
+                    // Maliyet eksikliğinden AYRI tutuluyor: ikisi farklı
+                    // sorunlar ve çözümleri de farklı (biri ürün
+                    // maliyeti girmek, diğeri eski sipariş).
+                    kdvEksik = !kdvTam
                 };
             }).ToList();
 
@@ -211,11 +295,25 @@ namespace ETicaretAPI.Controllers
                 toplamCiro = satirlar.Sum(x => x.ciro),
                 toplamAdet = satirlar.Sum(x => x.adet),
 
-                // ⚠️ Toplam kâr, SADECE maliyeti bilinen satırlardan.
+                // ⚠️ Toplam kâr, SADECE hesaplanabilen satırlardan.
                 // Karışık toplama yapmak "kısmen doğru" bir sayı üretir
                 // ki bu en kötüsüdür.
-                toplamKar = satirlar.Where(x => !x.maliyetEksik).Sum(x => x.kar ?? 0),
+                //
+                // ⭐ DEĞİŞTİ — koşul artık kârın kendisine bakıyor.
+                // Eskiden sadece maliyetEksik'e bakıyordu; KDV eksikliği
+                // eklenince o koşul yetersiz kaldı. "kar != null" iki
+                // sebebi birden kapsıyor ve yarın üçüncü bir sebep
+                // eklenirse burası kendiliğinden doğru kalır.
+                toplamKar = satirlar.Where(x => x.kar != null).Sum(x => x.kar!.Value),
+
+                // ⭐ YENİ — devlete ödenen toplam net KDV.
+                toplamKdv = satirlar.Where(x => x.kdv != null).Sum(x => x.kdv!.Value),
+
                 maliyetEksikSatirSayisi = satirlar.Count(x => x.maliyetEksik),
+
+                // ⭐ YENİ — KDV oranı bilinmediği için kârı
+                // hesaplanamayan satır sayısı.
+                kdvEksikSatirSayisi = satirlar.Count(x => x.kdvEksik),
 
                 urunler = satirlar
             });

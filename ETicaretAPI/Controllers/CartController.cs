@@ -17,10 +17,26 @@ namespace ETicaretAPI.Controllers
         // ⭐ YENİ — ayarlardan geliyor, artık koda gömülü değil.
         private readonly ETicaretAPI.Services.MagazaAyarlari _ayarlar;
 
-        public CartController(AppDbContext context, ETicaretAPI.Services.MagazaAyarlari ayarlar)
+        // ⭐ YENİ — sepet özetini (kargo dahil) üreten servis.
+        //
+        // Kargo eşiğini burada elle hesaplamıyoruz. Aynı hesabı
+        // /coupons/dogrula ve sipariş oluşturma da yapıyor; üçünün
+        // aynı sonucu vermesinin tek garantisi aynı kodu çağırmaları.
+        //
+        // Alternatif, eşik hesabını mobile bırakmaktı: sunucu sadece
+        // ayarları gönderir, mobil "kaç TL kaldı"yı kendi bulurdu.
+        // Seçmedik çünkü o formül sipariş anındaki formülden sessizce
+        // ayrışabilir ve müşteri sepette gördüğü tutarı ödemez.
+        private readonly ETicaretAPI.Services.SepetHesaplayici _hesaplayici;
+
+        public CartController(
+            AppDbContext context,
+            ETicaretAPI.Services.MagazaAyarlari ayarlar,
+            ETicaretAPI.Services.SepetHesaplayici hesaplayici)   // ⭐ YENİ
         {
             _context = context;
             _ayarlar = ayarlar;
+            _hesaplayici = hesaplayici;                          // ⭐ YENİ
         }
 
         // Token'dan giriş yapmış kullanıcının id'sini okur
@@ -58,7 +74,50 @@ namespace ETicaretAPI.Controllers
                       })
                 .ToListAsync();
 
-            return Ok(cart);
+            // ⭐ YENİ — SEPET ÖZETİ (kargo dahil)
+            //
+            // ⚠️ İNDİRİM PARAMETRESİ 0 — bilerek.
+            //
+            // Sepet ekranında henüz kupon uygulanmamıştır; kupon
+            // kutusu sipariş onay adımında. Buraya bir indirim
+            // uydurmak, "kargo bedava" rozetinin yanlış tutara göre
+            // hesaplanmasına yol açardı.
+            //
+            // Kupon girildiğinde /coupons/dogrula AYNI servisi
+            // indirimle çağırıp güncel özeti döndürüyor — mobil o
+            // cevabı kullanacak, kendi hesap yapmayacak.
+            var araToplam = cart.Sum(k => k.ProductPrice * k.Quantity);
+
+            var ozet = _hesaplayici.Hesapla(araToplam, 0);
+
+            // ⭐ DEĞİŞTİ — CEVAP ARTIK DÜZ DİZİ DEĞİL, NESNE.
+            //
+            // Eskiden doğrudan kalem dizisi dönüyordu. Özeti diziye
+            // sığdırmanın bir yolu yok, sarmalamak zorundaydık.
+            //
+            // Alternatifi özet için ayrı bir uç açmaktı (GET
+            // /api/cart/ozet). Seçmedik: sepet ile özetin AYNI ANIN
+            // verisi olması gerekiyor. İki ayrı istekte arada adet
+            // değişirse ekranda 3 ürün görünürken toplam 2 ürünün
+            // olurdu.
+            //
+            // ⚠️ Kalemlerin İÇİNDEKİ alan adlarına dokunulmadı
+            // (id, productId, productName, productPrice, quantity,
+            // isActive, productImageUrl) — mobil onları okuyor.
+            // Kıran tek şey en dış sarmalayıcı.
+            return Ok(new
+            {
+                kalemler = cart,
+
+                ozet = new
+                {
+                    araToplam = ozet.AraToplam,
+                    kargoUcreti = ozet.KargoUcreti,
+                    toplam = ozet.Toplam,
+                    ucretsizKargoyaKalan = ozet.UcretsizKargoyaKalan,
+                    ucretsizKargoKazanildi = ozet.UcretsizKargoKazanildi
+                }
+            });
         }
 
         // Sepette bir ürünün en fazla kaç adet olabileceği.

@@ -495,6 +495,29 @@ namespace ETicaretAPI.Controllers
             await PuanlariDoldur(new List<ProductDto> { dto });
             await FavorileriDoldur(new List<ProductDto> { dto });
 
+            // ⭐ YENİ (5.5) — bu müşterinin bekleyen stok bildirimi var mı?
+            //
+            // ⚠️ Yalnızca DETAY ucunda dolduruluyor, listede değil.
+            // Liste ucunda doldursaydık her sayfa için ek bir sorgu
+            // (ya da 20 satırlık bir IN) gerekirdi; oysa buton sadece
+            // detay sayfasında var. Description'da verilen kararın
+            // aynısı: maliyeti faydasından büyük olanı taşıma.
+            //
+            // ⚠️ NotifiedAt == null şartı önemli: gönderilmiş bir
+            // kayıt "bekleyen talep" değildir. Şartı koymasaydık,
+            // bir kez bildirim almış müşteri ürün tekrar tükendiğinde
+            // butonu "talebin var" halinde görür ve yeniden talep
+            // bırakamazdı.
+            var kullaniciId = GetUserId();
+
+            if (kullaniciId != null)
+            {
+                dto.StokBildirimiVar = await _context.StockAlerts
+                    .AnyAsync(s => s.UserId == kullaniciId.Value
+                                && s.ProductId == id
+                                && s.NotifiedAt == null);
+            }
+
             return Ok(dto);
         }
 
@@ -509,6 +532,117 @@ namespace ETicaretAPI.Controllers
         // son 30 günde kaç adet 'satis' hareketi olduğuna bakması yeterli.
         // Bu ticari bir bilgi. Üç katmanlı yetkinin en dıştaki (ve tek
         // gerçek olan) katmanı burası.
+        // ============================================================
+        //  ⭐ YENİ (5.5) — STOK BİLDİRİMİ ("stoka gelince haber ver")
+        //
+        //  İki uç: talep bırak (POST) ve vazgeç (DELETE).
+        //  Talebin var olup olmadığı ürün detayında dönüyor.
+        // ============================================================
+
+        // 🟡 POST /api/products/5/stok-bildirimi
+        [Authorize]
+        [HttpPost("{id}/stok-bildirimi")]
+        public async Task<IActionResult> StokBildirimiIste(int id)
+        {
+            var userId = GetUserId();
+
+            if (userId == null)
+            {
+                return Unauthorized(new { mesaj = "Giriş yapman gerekiyor." });
+            }
+
+            // Ürün var mı VE satışta mı?
+            //
+            // ⚠️ Stok kontrolü YAPMIYORUZ — bilerek.
+            // "Sadece tükenmişken talep bırakılabilir" deseydik şu
+            // yarış çıkardı: müşteri sayfayı tükenmiş görürken tam o
+            // anda stok girer, talep reddedilir ve müşteri neden
+            // reddedildiğini anlamaz. Stokta olan ürüne talep bırakmak
+            // zararsız: tarama zaten bir sonraki turda maili atıp
+            // kaydı kapatır.
+            var urunVar = await _context.Products
+                .AnyAsync(p => p.Id == id && p.IsActive);
+
+            if (!urunVar)
+            {
+                return NotFound(new { mesaj = "Ürün bulunamadı." });
+            }
+
+            // ---------- VARSA TAZELE, YOKSA EKLE ----------
+            //
+            // ⚠️ Önce güncellemeyi deniyoruz, sonucuna bakıyoruz —
+            // "önce sorgula, yoksa ekle" değil. Sepetteki upsert
+            // deseninin aynısı.
+            //
+            // Tazeleme neden gerekli? Müşteri daha önce bu ürün için
+            // bildirim almış olabilir (NotifiedAt dolu). Ürün tekrar
+            // tükenip tekrar geldiğinde yeniden haber almak istiyorsa
+            // aynı satırı yeniden açıyoruz — ikinci satır açmıyoruz,
+            // benzersiz indeks zaten buna izin vermezdi.
+            var etkilenen = await _context.StockAlerts
+                .Where(s => s.UserId == userId.Value && s.ProductId == id)
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.NotifiedAt, (DateTime?)null));
+
+            if (etkilenen == 0)
+            {
+                var yeni = new StockAlert
+                {
+                    ProductId = id,
+                    UserId = userId.Value,
+                    CreatedAt = DateTime.UtcNow,
+                    NotifiedAt = null
+                };
+
+                _context.StockAlerts.Add(yeni);
+
+                try
+                {
+                    await _context.SaveChangesAsync();
+                }
+                catch (DbUpdateException)
+                {
+                    // Tam bu anda başka bir istek satırı açtı ve
+                    // benzersiz indeks bizi reddetti. Hata değil,
+                    // beklenen yarış sonucu — istenen durum zaten
+                    // oluştu (talep kayıtlı).
+                    //
+                    // ⚠️ Başarısız Add hâlâ tracker'da "Added";
+                    // detach etmezsek sonraki SaveChanges aynı
+                    // INSERT'i tekrar dener.
+                    _context.Entry(yeni).State = EntityState.Detached;
+                }
+            }
+
+            return Ok(new { mesaj = "Ürün stoğa geldiğinde sana haber vereceğiz." });
+        }
+
+        // 🟡 DELETE /api/products/5/stok-bildirimi
+        [Authorize]
+        [HttpDelete("{id}/stok-bildirimi")]
+        public async Task<IActionResult> StokBildiriminiIptalEt(int id)
+        {
+            var userId = GetUserId();
+
+            if (userId == null)
+            {
+                return Unauthorized(new { mesaj = "Giriş yapman gerekiyor." });
+            }
+
+            // ⚠️ Sahiplik kontrolü SORGUYA dahil (ayrı bir if değil).
+            // Ayrı yazılsaydı unutulabilirdi; bu haliyle başkasının
+            // kaydına dokunmak imkânsız.
+            //
+            // Kayıt yoksa da 200 dönüyoruz: istenen son durum
+            // ("bildirim istemiyorum") zaten sağlanmış. 404 dönmek,
+            // iki kez basan müşteriye hata göstermek olurdu.
+            await _context.StockAlerts
+                .Where(s => s.UserId == userId.Value && s.ProductId == id)
+                .ExecuteDeleteAsync();
+
+            return Ok(new { mesaj = "Bildirim isteğin kaldırıldı." });
+        }
+
+
         [Authorize(Roles = "admin")]
         [HttpGet("{id}/stok-hareketleri")]
         public async Task<IActionResult> GetStokHareketleri(

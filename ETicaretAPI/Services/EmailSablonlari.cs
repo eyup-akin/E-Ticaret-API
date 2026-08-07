@@ -541,5 +541,50 @@ namespace ETicaretAPI.Services
                 "Yöneticilik başvurunuz hakkında",
                 Iskelet("Başvuru Sonucu", "#e67e22", govde));
         }
+
+
+        // 7) ⭐ YENİ (5.5) — BEKLENEN ÜRÜN STOĞA GELDİ
+        public EmailIcerik StokaGeldi(string adSoyad, string urunAdi, int urunId)
+        {
+            // Mağaza sitesi tanımlıysa ürüne doğrudan link veriyoruz.
+            //
+            // ⚠️ Tanımlı değilse satır HİÇ çizilmiyor — boş bir href
+            // ya da "#" veren bir bağlantı, tıklayan müşteriyi hiçbir
+            // yere götürmez ve maili bozuk gösterirdi.
+            var siteUrl = _config["Uygulama:SiteUrl"] ?? "";
+
+            var urunSatiri = string.IsNullOrWhiteSpace(siteUrl)
+                ? string.Empty
+                : $@"<p style=""margin:16px 0 0 0;"">
+                       <a href=""{siteUrl}/urun/{urunId}"">Ürüne git</a>
+                     </p>";
+
+            // ⚠️ urunAdi veritabanından geliyor ama yine de Kacir()
+            // ile kaçırılıyor. Ürün adını panelden bir yönetici
+            // yazıyor; "veritabanından geldi" güvenli demek değil.
+            var govde = $@"
+<p style=""margin:0 0 12px 0;"">Merhaba {Kacir(adSoyad)},</p>
+
+<p style=""margin:0 0 4px 0;"">
+  Beklediğiniz <b>{Kacir(urunAdi)}</b> yeniden stoklarımızda.
+</p>
+
+<p style=""margin:12px 0 0 0;"">
+  Stok sınırlı olabilir; sipariş vermek isterseniz gecikmemenizi öneririz.
+</p>
+
+{urunSatiri}
+
+<p style=""margin:20px 0 0 0;font-size:13px;color:#7f8c8d;"">
+  Bu bildirimi, ürün tükendiğinde ""stoka gelince haber ver"" dediğiniz
+  için aldınız. Tek seferliktir; tekrar haber almak isterseniz ürün
+  sayfasından yeniden talep edebilirsiniz.
+</p>";
+
+            // Yeşil: beklenen, olumlu haber.
+            return new EmailIcerik(
+                $"{urunAdi} yeniden stokta",
+                Iskelet("Ürün Stoğa Geldi", "#27ae60", govde));
+        }
     }
 }

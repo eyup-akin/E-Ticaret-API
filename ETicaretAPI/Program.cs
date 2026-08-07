@@ -193,6 +193,9 @@ builder.Services.AddHangfireServer();
 // İçe aktarma servisimizi tanıt (Hangfire bunu kendi scope'unda üretecek)
 builder.Services.AddScoped<ETicaretAPI.Services.IceAktarmaServisi>();
 
+// ⭐ YENİ (5.5) — stok bildirim servisi (Hangfire kendi scope'unda üretecek)
+builder.Services.AddScoped<ETicaretAPI.Services.StokBildirimServisi>();
+
 
 // ⭐ YENİ — RATE LIMIT (brute-force / çok sık deneme koruması)
 // "giris" politikası: bir IP, dakikada en fazla 5 login denemesi yapabilir.
@@ -380,6 +383,30 @@ app.UseHangfireDashboard("/hangfire", new DashboardOptions
 {
     Authorization = new[] { new HangfireYetkiFiltresi() }
 });
+
+// ⭐ YENİ (5.5) — STOK BİLDİRİMİ TARAMASI
+//
+// Bekleyen "stoka gelince haber ver" isteklerini tarar ve ürünü
+// tekrar satılabilir hale gelmiş olanlara mail atar.
+//
+// ⚠️ NEDEN PERİYODİK, NEDEN STOK ARTIŞINDA TETİKLENMİYOR?
+// Gerekçe StokBildirimServisi'nin başında uzun uzun yazılı: kısaca,
+// StokDefteri bilerek SaveChanges çağırmadığı için "stok gerçekten
+// arttı" anını göremiyor; alternatif stoğu artıran beş ayrı yere
+// çağrı koymaktı ve orada unutulan bir yer, müşterinin hiç mail
+// almaması demekti. Tek nokta, atlanamaz.
+//
+// ⚠️ SABİT İŞ KİMLİĞİ ("stok-bildirimleri") — AddOrUpdate bu adı
+// anahtar olarak kullanıyor. Sabit olmasaydı her uygulama açılışında
+// yeni bir tekrarlayan iş eklenir ve mailler kat kat çoğalırdı.
+//
+// Dakikada bir: "stoka geldi" bildirimi için birkaç dakikalık
+// gecikme kabul edilebilir, üstelik tarama boş geçtiğinde tek bir
+// hafif sorgu maliyeti var.
+RecurringJob.AddOrUpdate<ETicaretAPI.Services.StokBildirimServisi>(
+    "stok-bildirimleri",
+    servis => servis.BekleyenleriGonderAsync(),
+    "*/1 * * * *");
 
 
 

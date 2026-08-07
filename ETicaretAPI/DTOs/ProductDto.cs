@@ -113,5 +113,17 @@
         // int, veri yükü yok denecek kadar az. Kural "her şeyi kes"
         // değil, "maliyeti faydasından büyük olanı kes".
         public int VatRate { get; set; }
+
+
+        // ⭐ YENİ (5.5) — bu müşterinin bekleyen stok bildirimi var mı?
+        //
+        // ⚠️ SADECE DETAY UCUNDA DOLU, listede her zaman false.
+        // Butonun yaşadığı tek yer ürün detay sayfası; listede
+        // doldurmak sayfa başına fazladan bir sorgu demekti.
+        //
+        // ⚠️ Misafirde de false — kimlik yoksa "kimin talebi"
+        // sorusunun cevabı da yok. Mobil misafiri zaten giriş
+        // ekranına yönlendiriyor.
+        public bool StokBildirimiVar { get; set; }
     }
 }

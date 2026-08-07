@@ -27,6 +27,9 @@ namespace ETicaretAPI.Data
 
         // ⭐ YENİ — stok hareket defteri
         public DbSet<StockMovement> StockMovements { get; set; }
+
+        // ⭐ YENİ (5.5) — "stoka gelince haber ver" istekleri
+        public DbSet<StockAlert> StockAlerts { get; set; }
         public DbSet<ImportJob> ImportJobs { get; set; } // ⭐ YENİ
 
         public DbSet<RefreshToken> RefreshTokens { get; set; } // ⭐ YENİ
@@ -220,6 +223,32 @@ namespace ETicaretAPI.Data
 
                 e.Property(s => s.Aciklama)
                  .HasMaxLength(300);
+            });
+
+            // ⭐ YENİ (5.5) — STOK BİLDİRİMLERİ
+            modelBuilder.Entity<StockAlert>(e =>
+            {
+                // ⚠️ AYNI MÜŞTERİ + AYNI ÜRÜN İÇİN TEK SATIR.
+                //
+                // Kuralı kodda "önce sorgula, yoksa ekle" diye
+                // yazabilirdik ama iki istek aynı anda gelirse ikisi de
+                // "kayıt yok" cevabı alır ve ikisi de ekler — müşteriye
+                // iki mail gider. Kontrol ile yazma arasındaki
+                // mikrosaniye her zaman vardır; sepet ve admin
+                // başvurularında aynı dersi almıştık.
+                //
+                // ⚠️ FİLTRESİZ unique — gönderilmiş kayıtlar da dahil.
+                // "Sadece bekleyenler benzersiz olsun" deseydik bir
+                // müşteri aynı ürün için onlarca kapanmış kayıt
+                // biriktirebilirdi. Tekrar abone olmak, mevcut satırın
+                // NotifiedAt'ini null'a çekiyor — yeni satır açmıyor.
+                e.HasIndex(s => new { s.UserId, s.ProductId })
+                 .IsUnique();
+
+                // Tarama sorgusunun indeksi: "bekleyen kayıtları ürün
+                // ürün grupla". NotifiedAt önde çünkü eşitlik filtresi
+                // (null olanlar) önce daraltıyor.
+                e.HasIndex(s => new { s.NotifiedAt, s.ProductId });
             });
 
             // ⭐ YENİ — ADMİN BAŞVURULARI

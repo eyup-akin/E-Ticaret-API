@@ -5,7 +5,50 @@
         public int Id { get; set; }
         public string Name { get; set; } = string.Empty;
         public decimal Price { get; set; }
-        public int Stock { get; set; }
+
+        // ⭐ DEĞİŞTİ — artık nullable ve MÜŞTERİYE GÖNDERİLMİYOR.
+        //
+        // ⚠️ ESKİDEN HAM STOK HERKESE GİDİYORDU.
+        //
+        // Mobil ekranda "Stokta 3 adet var" yazıyordu ve JSON'da tam
+        // sayı vardı. Bu iki sorun doğuruyordu:
+        //
+        //   1) TİCARİ: Rakip, her ürünün stoğunu günlük çekip satış
+        //      hızını hesaplayabilir. Cost'u gizlemekle aynı gerekçe.
+        //   2) PSİKOLOJİK: "Stokta 847 adet var" aciliyeti öldürüyor;
+        //      "Son 3 ürün" satın almayı hızlandırıyor.
+        //
+        // Ekranda gizlemek YETMEZ — JSON'da giden her şey herkese
+        // açıktır. Alanın kendisi boşaltılıyor.
+        //
+        // Admin isteklerinde dolu gelir: panelin envanter yönetmek
+        // için gerçek sayıya ihtiyacı var.
+        public int? Stock { get; set; }
+
+        // ⭐ YENİ — MÜŞTERİYE GİDEN TÜRETİLMİŞ STOK BİLGİSİ
+        //
+        // "yok" | "az" | "var"
+        //
+        // ⚠️ Neden ham sayı yerine üç durum?
+        // Müşterinin kararı için gereken bilgi bu üçü: alabilir mi
+        // (yok/var), acele etmeli mi (az). Tam sayı bundan fazlasını
+        // söylüyor ve fazlası ticari bilgi.
+        //
+        // Eşik MagazaAyarlari.StokAzEsigi'nden geliyor — panel, rapor
+        // ve mobil aynı sayıyı kullanıyor.
+        public string StokDurumu { get; set; } = "var";
+
+        // Yalnızca StokDurumu == "az" iken dolu, diğer durumlarda null.
+        //
+        // ⚠️ Neden her durumda gönderilmiyor?
+        // "var" durumunda göndermek, gizlemeye çalıştığımız ham sayıyı
+        // geri sızdırırdı. "yok" durumunda ise zaten 0 — ayrıca
+        // söylemenin bilgi değeri yok.
+        //
+        // Mobil bunu "Son 3 ürün" yazısında ve adet kontrolünün üst
+        // sınırında kullanıyor.
+        public int? KalanAdet { get; set; }
+
         public int CategoryId { get; set; }
 
         // ⭐ YENİ — barkod. Herkese açık (gizli bilgi değil).

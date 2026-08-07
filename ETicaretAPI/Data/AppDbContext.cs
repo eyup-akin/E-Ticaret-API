@@ -423,6 +423,13 @@ namespace ETicaretAPI.Data
                 .Property(o => o.ShippingCost)
                 .HasPrecision(18, 2);
 
+            // ⭐ YENİ — sepete eklenme fiyatı da bir para değeri.
+            // Projedeki 13 para kolonunun hepsi bunu açıkça bildiriyor;
+            // bildirmeyenler EF uyarısı üretiyor (bkz. ShippingCost).
+            modelBuilder.Entity<CartItem>()
+                .Property(c => c.EklenmeFiyati)
+                .HasPrecision(18, 2);
+
 
             // ⭐ YENİ — KARGO VE NOT ALANLARININ UZUNLUK SINIRLARI
             //

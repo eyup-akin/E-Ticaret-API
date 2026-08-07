@@ -65,6 +65,14 @@ namespace ETicaretAPI.Controllers
                           ProductPrice = p.Price,
                           Quantity = c.Quantity,
                           IsActive = p.IsActive,          // ⭐ YENİ
+
+                          // ⭐ YENİ (5.4) — sepete atılırken görülen fiyat.
+                          //
+                          // Karşılaştırmayı BURADA yapmıyoruz: FiyatDegisti
+                          // ve FiyatFarki, DTO'da hesaplanan özellikler.
+                          // Buraya yazsaydık aynı kural sipariş onay
+                          // akışında ikinci kez yazılmak zorunda kalırdı.
+                          EklenmeFiyati = c.EklenmeFiyati,
                           ProductImageUrl = _context.ProductImages
                               .Where(pi => pi.ProductId == p.Id)
                               .OrderByDescending(pi => pi.IsMain)
@@ -108,6 +116,19 @@ namespace ETicaretAPI.Controllers
             return Ok(new
             {
                 kalemler = cart,
+
+                // ⭐ YENİ (5.4) — sepette fiyatı değişen ürün var mı?
+                //
+                // Kalemlerin içinde zaten satır satır duruyor; bu, mobilin
+                // her açılışta listeyi tarayıp kendi bayrağını çıkarmasını
+                // önlüyor. Aynı soruyu iki taraf da soruyorsa cevabı
+                // sunucu versin — mobil "hangi satırda" diye bakmadan
+                // uyarı şeridini çizip çizmeyeceğini biliyor.
+                //
+                // ⚠️ Bu bir SAYIM değil, VAR/YOK. Kaç ürünün değiştiği
+                // satırlardan sayılabilir; burada ikinci bir sayı tutmak
+                // listeyle çelişebilecek bir kaynak yaratırdı.
+                fiyatDegisenVar = cart.Any(k => k.FiyatDegisti),
 
                 ozet = new
                 {
@@ -170,16 +191,33 @@ namespace ETicaretAPI.Controllers
             // Mesajı bilerek tek tuttuk: "ürün yok" ile "ürün pasif" müşteri
             // açısından aynı sonuca çıkıyor — alamıyor. İkisini ayırmak
             // müşteriye kullanamayacağı bir bilgi verirdi.
-            var urunSatistaMi = await _context.Products
-                .AnyAsync(p => p.Id == dto.ProductId && p.IsActive);
+            // ⭐ DEĞİŞTİ (5.4) — AnyAsync yerine fiyatı da getiren sorgu.
+            //
+            // Eskiden sadece "satışta mı?" soruluyordu. Artık müşterinin
+            // şu anda gördüğü fiyatı da kaydediyoruz (EklenmeFiyati), o
+            // yüzden değerin kendisi lazım.
+            //
+            // ⚠️ Hâlâ TEK sorgu. "Önce var mı bak, sonra fiyatı çek"
+            // deseydik veritabanına iki tur giderdik.
+            var urun = await _context.Products
+                .Where(p => p.Id == dto.ProductId && p.IsActive)
+                .Select(p => new { p.Price })
+                .FirstOrDefaultAsync();
 
-            if (!urunSatistaMi)
+            if (urun == null)
             {
                 return NotFound(new { mesaj = "Bu ürün şu anda satışta değil biladerim!" });
             }
 
             // Lambda içinde kullanacağımız için yerel değişkene alıyoruz
             var adet = dto.Quantity;
+
+            // ⭐ YENİ (5.4) — müşterinin ŞU AN gördüğü fiyat.
+            //
+            // ⚠️ Bu değer siparişte KULLANILMAYACAK. Sipariş güncel
+            // fiyattan oluşuyor; bu sadece "sepete atarken ne görmüştü"
+            // sorusunun cevabı.
+            var guncelFiyat = urun.Price;
 
             // ---------- 1) SATIR VARSA ATOMİK ARTIR ----------
             //
@@ -190,11 +228,20 @@ namespace ETicaretAPI.Controllers
             //
             // Okuma yok — veritabanı mevcut değeri kendi okuyup üstüne ekliyor,
             // hepsi satır kilidi altında tek cümlede. Kayıp güncelleme imkânsız.
+            // ⭐ DEĞİŞTİ (5.4) — adetle birlikte EklenmeFiyati de yazılıyor.
+            //
+            // ⚠️ TANIK HER EKLEMEDE TAZELENİYOR — bilerek.
+            //
+            // Müşteri bu ürünü tekrar sepete atıyorsa ürün sayfasında
+            // GÜNCEL fiyatı görüp öyle basmış demektir. Alan "en son
+            // gördüğü fiyat"ı tutuyor; eski değeri korusaydık, müşteriye
+            // az önce kendi gözüyle gördüğü ve kabul ettiği fiyat için
+            // "dikkat, fiyat değişti" uyarısı gösterirdik.
             var etkilenen = await _context.CartItems
                 .Where(c => c.UserId == userId && c.ProductId == dto.ProductId)
-                .ExecuteUpdateAsync(s => s.SetProperty(
-                    c => c.Quantity,
-                    c => c.Quantity + adet));
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(c => c.Quantity, c => c.Quantity + adet)
+                    .SetProperty(c => c.EklenmeFiyati, guncelFiyat));
 
             // ---------- 2) SATIR YOKTUYSA EKLE ----------
             if (etkilenen == 0)
@@ -203,7 +250,8 @@ namespace ETicaretAPI.Controllers
                 {
                     UserId = userId,
                     ProductId = dto.ProductId,
-                    Quantity = adet
+                    Quantity = adet,
+                    EklenmeFiyati = guncelFiyat   // ⭐ YENİ (5.4)
                 };
 
                 _context.CartItems.Add(yeniOge);
@@ -225,9 +273,9 @@ namespace ETicaretAPI.Controllers
 
                     await _context.CartItems
                         .Where(c => c.UserId == userId && c.ProductId == dto.ProductId)
-                        .ExecuteUpdateAsync(s => s.SetProperty(
-                            c => c.Quantity,
-                            c => c.Quantity + adet));
+                        .ExecuteUpdateAsync(s => s
+                            .SetProperty(c => c.Quantity, c => c.Quantity + adet)
+                            .SetProperty(c => c.EklenmeFiyati, guncelFiyat));
                 }
             }
 
@@ -270,6 +318,17 @@ namespace ETicaretAPI.Controllers
                 return NotFound(new { mesaj = "Sepet öğesi bulunamadı!" });
             }
 
+            // ⚠️ EklenmeFiyati'na BURADA DOKUNULMUYOR — bilerek. (5.4)
+            //
+            // Bu uç sepet ekranındaki − / + butonlarının çağırdığı yer.
+            // Fiyatı tazeleseydik şu olurdu: müşteri "fiyat 100'den
+            // 120'ye çıktı" uyarısını görür, adedi bir azaltır ve uyarı
+            // SESSİZCE KAYBOLURDU — hiçbir şey kabul etmemiş olmasına
+            // rağmen.
+            //
+            // Tanık yalnızca müşteri ürünü ürün sayfasından TEKRAR
+            // eklerken tazeleniyor; orada güncel fiyatı görüp öyle
+            // basıyor. Sepetteki adet oynatma böyle bir görme değil.
             item.Quantity = dto.Quantity;
             await _context.SaveChangesAsync();
             return Ok(new { mesaj = "Adet güncellendi!" });

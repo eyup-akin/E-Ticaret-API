@@ -5,6 +5,7 @@ using System.Security.Claims;
 using ETicaretAPI.Data;
 using ETicaretAPI.Models;
 using ETicaretAPI.DTOs;
+using ETicaretAPI.Services;   // ⭐ YENİ — MagazaAyarlari
 
 namespace ETicaretAPI.Controllers
 {
@@ -15,9 +16,14 @@ namespace ETicaretAPI.Controllers
     {
         private readonly AppDbContext _context;
 
-        public FavoritesController(AppDbContext context)
+        // ⭐ YENİ — stok eşiği için (5.3).
+        // Eşik panel, rapor ve mobilde AYNI sayı olmalı.
+        private readonly MagazaAyarlari _ayarlar;
+
+        public FavoritesController(AppDbContext context, MagazaAyarlari ayarlar)
         {
             _context = context;
+            _ayarlar = ayarlar;
         }
 
         private int GetUserId()
@@ -56,7 +62,25 @@ namespace ETicaretAPI.Controllers
                           ProductId = p.Id,
                           ProductName = p.Name,
                           ProductPrice = p.Price,
-                          Stock = p.Stock,
+                          // ⭐ DEĞİŞTİ — ham stok yerine türetilmiş durum.
+                          //
+                          // ⚠️ Hesap SQL'de yapılıyor (bellekte değil):
+                          // eşik karşılaştırması basit bir sayı
+                          // kıyaslaması ve veritabanı bunu zaten
+                          // yapabiliyor. Bellekte yapsaydık ham stoğu
+                          // önce DTO'ya taşımak, sonra silmek
+                          // gerekirdi — sızıntı riskini kodun içinde
+                          // bir adım daha yaşatmak demekti.
+                          StokDurumu =
+                              p.Stock <= 0 ? "yok" :
+                              p.Stock < _ayarlar.StokAzEsigi ? "az" : "var",
+
+                          // Yalnızca "az" durumunda dolu.
+                          KalanAdet =
+                              p.Stock > 0 && p.Stock < _ayarlar.StokAzEsigi
+                                  ? (int?)p.Stock
+                                  : null,
+
                           ProductImageUrl = _context.ProductImages
                               .Where(pi => pi.ProductId == p.Id)
                               .OrderByDescending(pi => pi.IsMain)   // önce ana resim

@@ -1017,6 +1017,61 @@ namespace ETicaretAPI.Controllers
             }
         }
 
+        // 🟡 GET /api/orders/durum-ozeti — siparişlerimin durum dağılımı
+        //
+        // ⚠️ NEDEN AYRI BİR UÇ, NEDEN LİSTEDEN SAYILMIYOR?
+        //
+        // Sipariş listesi sayfalanabilir. İstemci elindeki listeyi
+        // gruplayıp saysaydı yalnızca ELİNDEKİ SAYFAYI sayardı ve
+        // "Teslim Edildi (5)" yazarken gerçekte 40 tane olurdu.
+        // Rakam patlamaz, sessizce yanlış çıkardı — en kötü hata türü.
+        //
+        // ⚠️ Sayım VERİTABANINDA yapılıyor (GroupBy → SQL COUNT).
+        // Siparişleri çekip belleğe alıp orada saymak, 500 siparişi
+        // sadece 4 sayı üretmek için ağdan geçirmek olurdu.
+        [HttpGet("durum-ozeti")]
+        public async Task<IActionResult> GetDurumOzeti()
+        {
+            var userId = GetUserId();
+
+            var sayimlar = await _context.Orders
+                .Where(o => o.UserId == userId)
+                .GroupBy(o => o.Status)
+                .Select(g => new { Durum = g.Key, Adet = g.Count() })
+                .ToListAsync();
+
+            // ⚠️ SIFIR OLAN DURUMLAR DA DÖNÜYOR.
+            //
+            // GroupBy yalnızca VAR OLAN durumları üretir; hiç iptali
+            // olmayan müşteride "iptal" anahtarı hiç gelmezdi.
+            // Sözlükten okuyup varsayılan 0 vererek dördünü de
+            // garantiliyoruz.
+            //
+            // Neden gizlemiyoruz? "İptal (0)" görmek müşteriye
+            // "iptalim yok" der; satırın hiç olmaması "burada iptal
+            // diye bir şey yok mu?" sorusunu doğurur. Boş bir cevap,
+            // cevapsızlıktan iyidir.
+            //
+            // ⚠️ Anahtarlar Order.Status ile BİREBİR aynı yazılmalı;
+            // mobildeki durum.js de aynı kodları tanıyor.
+            var sozluk = sayimlar.ToDictionary(x => x.Durum, x => x.Adet);
+
+            int Al(string durum) => sozluk.TryGetValue(durum, out var a) ? a : 0;
+
+            return Ok(new
+            {
+                hazirlaniyor = Al("hazirlaniyor"),
+                kargoda = Al("kargoda"),
+                teslimEdildi = Al("teslim_edildi"),
+                iptal = Al("iptal"),
+
+                // Toplamı da gönderiyoruz — istemci dördünü toplayabilir
+                // ama o toplam, ileride yeni bir durum eklendiğinde
+                // sessizce eksik kalırdı.
+                toplam = sayimlar.Sum(x => x.Adet)
+            });
+        }
+
         // 🟡 GET /api/orders — benim siparişlerim
         [HttpGet]
         public async Task<IActionResult> GetMyOrders()
@@ -1443,7 +1498,19 @@ namespace ETicaretAPI.Controllers
                     durum = x.o.Status,
                     odemeDurumu = x.o.PaymentStatus,
                     kartSon4 = x.o.CardLast4,
-                    tاريخ = x.o.CreatedAt,
+                    // ⭐ DÜZELTİLDİ — alan adı bozuktu.
+                    //
+                    // Buraya "tarih" yerine "t" + dört ARAPÇA harf
+                    // (ا ر ي خ) yazılmıştı. Muhtemelen klavye/IME
+                    // kazası. C# Unicode tanımlayıcılara izin verdiği
+                    // için DERLENDİ ve hiçbir uyarı çıkmadı.
+                    //
+                    // Sonuç: JSON'a "tarih" değil o bozuk adla
+                    // çıkıyordu. Panel s.tarih okuyup undefined alıyor,
+                    // tarihBicimle(undefined) "-" döndürüyordu.
+                    // Yani sipariş listesinde TARİH SÜTUNU HİÇ
+                    // ÇALIŞMAMIŞTI — patlamayan, sessiz hata.
+                    tarih = x.o.CreatedAt,
 
                     // ⭐ YENİ — kargo takip bilgisi.
                     //

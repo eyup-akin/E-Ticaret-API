@@ -29,6 +29,11 @@ namespace ETicaretAPI.Controllers
         // vermemiz gerekirdi — DI bunu bizim yerimize, hatasız yapıyor.
         private readonly StokDefteri _defter;
 
+        // ⭐ YENİ — stok eşiği için mağaza ayarları.
+        // "Az stok" sınırı panel, rapor ve mobilde AYNI sayı olmalı;
+        // burada elle 5 yazsaydık dördüncü bir kopya olurdu.
+        private readonly MagazaAyarlari _ayarlar;
+
 
         // Resim yükleme kuralları — tek yerde dursun
         private const long MaxDosyaBoyutu = 5 * 1024 * 1024; // 5 MB
@@ -39,12 +44,66 @@ namespace ETicaretAPI.Controllers
             AppDbContext context,
             IWebHostEnvironment env,
             IHttpClientFactory httpFactory,
-            StokDefteri defter)              // ⭐ YENİ
+            StokDefteri defter,              // ⭐ YENİ
+            MagazaAyarlari ayarlar)          // ⭐ YENİ (5.3)
         {
             _context = context;
             _env = env;
             _httpFactory = httpFactory;
             _defter = defter;                // ⭐ YENİ
+            _ayarlar = ayarlar;              // ⭐ YENİ
+        }
+
+
+        // ⭐ YENİ — MÜŞTERİYE GİDEN STOK BİLGİSİNİ HAZIRLA
+        //
+        // ⚠️ NEDEN AYRI METOT?
+        //
+        // Aynı dönüşüm İKİ uçta birden lazım: liste (GetProducts) ve
+        // detay (GetProduct). İki yere kopyalasaydık, eşik kuralı
+        // değiştiğinde birini güncelleyip diğerini unutmak işten
+        // değildi — ve sonuç "listede Stokta, detayda Son 2 ürün"
+        // gibi kendi içinde çelişen bir ekran olurdu.
+        //
+        // ⚠️ ADMIN İÇİN HİÇBİR ŞEY GİZLENMİYOR.
+        // Panel envanter yönetiyor, gerçek sayıya ihtiyacı var.
+        // Müşteri için ham sayı SIFIRLANIYOR — ekranda gizlemek
+        // yetmez, JSON'da giden her şey herkese açıktır.
+        private void StokBilgisiniDoldur(List<ProductDto> urunler, bool adminMi)
+        {
+            var esik = _ayarlar.StokAzEsigi;
+
+            foreach (var u in urunler)
+            {
+                // Ham stok her zaman DTO'ya yazılmış durumda geliyor;
+                // türetilmiş alanları ondan hesaplıyoruz.
+                var stok = u.Stock ?? 0;
+
+                if (stok <= 0)
+                {
+                    u.StokDurumu = "yok";
+                    u.KalanAdet = null;
+                }
+                else if (stok < esik)
+                {
+                    u.StokDurumu = "az";
+
+                    // ⚠️ Kalan adet SADECE "az" durumunda dolduruluyor.
+                    // "var" durumunda göndermek, gizlemeye çalıştığımız
+                    // ham sayıyı geri sızdırırdı.
+                    u.KalanAdet = stok;
+                }
+                else
+                {
+                    u.StokDurumu = "var";
+                    u.KalanAdet = null;
+                }
+
+                if (!adminMi)
+                {
+                    u.Stock = null;
+                }
+            }
         }
             
         // ==========================================================
@@ -363,6 +422,9 @@ namespace ETicaretAPI.Controllers
                 }
             }
 
+            // ⭐ YENİ — türetilmiş stok bilgisi + müşteride ham stoğu sil
+            StokBilgisiniDoldur(products, adminMi);
+
             await ResimleriDoldur(products);
             await PuanlariDoldur(products);
 
@@ -423,6 +485,11 @@ namespace ETicaretAPI.Controllers
                 // (Description'ın aksine) — tek int, veri yükü yok.
                 VatRate = product.VatRate
             };
+
+            // ⭐ YENİ — liste ucuyla AYNI dönüşüm.
+            // Ayrı yazsaydık "listede Stokta, detayda Son 2 ürün" gibi
+            // kendi içinde çelişen bir ekran çıkabilirdi.
+            StokBilgisiniDoldur(new List<ProductDto> { dto }, adminMi);
 
             await ResimleriDoldur(new List<ProductDto> { dto });
             await PuanlariDoldur(new List<ProductDto> { dto });

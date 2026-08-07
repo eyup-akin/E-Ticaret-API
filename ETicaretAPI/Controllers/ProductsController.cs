@@ -231,6 +231,56 @@ namespace ETicaretAPI.Controllers
 
 
         // Ürünlere favori sayısını doldurur (tek sorguda)
+        // ⭐ YENİ (4.8) — hangi ürünler fiziksel olarak silinebilir?
+        //
+        // ⚠️ ÜRÜN BAŞINA SORGU YOK — toplam ÜÇ sorgu.
+        //
+        // Projeksiyonun içine Any() yazsaydık EF her satır için ayrı
+        // bir korelasyonlu alt sorgu üretirdi: 40 ürünlük listede 120
+        // alt sorgu. Bunun yerine üç tabloya da "bu id'lerden hangisi
+        // geçiyor?" diye tek seferde soruyoruz. Puan ve favori
+        // doldurmadaki desenin aynısı.
+        private async Task SilinebilirligiDoldur(List<ProductDto> urunler)
+        {
+            if (urunler.Count == 0)
+            {
+                return;
+            }
+
+            var idler = urunler.Select(u => u.Id).ToList();
+
+            var siparisliler = await _context.OrderItems
+                .Where(oi => idler.Contains(oi.ProductId))
+                .Select(oi => oi.ProductId)
+                .Distinct()
+                .ToListAsync();
+
+            var yorumlular = await _context.Reviews
+                .Where(r => idler.Contains(r.ProductId))
+                .Select(r => r.ProductId)
+                .Distinct()
+                .ToListAsync();
+
+            var hareketliler = await _context.StockMovements
+                .Where(sm => idler.Contains(sm.ProductId))
+                .Select(sm => sm.ProductId)
+                .Distinct()
+                .ToListAsync();
+
+            // HashSet: aşağıdaki döngüde her ürün için üç arama
+            // yapılıyor. Liste üzerinde Contains ararsak arama sayısı
+            // ürün × kayıt olurdu.
+            var gecmisliler = new HashSet<int>(siparisliler);
+            gecmisliler.UnionWith(yorumlular);
+            gecmisliler.UnionWith(hareketliler);
+
+            foreach (var urun in urunler)
+            {
+                urun.SilinebilirMi = !gecmisliler.Contains(urun.Id);
+            }
+        }
+
+
         private async Task FavorileriDoldur(List<ProductDto> urunler)
         {
             if (urunler.Count == 0)
@@ -359,7 +409,8 @@ namespace ETicaretAPI.Controllers
         public async Task<IActionResult> GetProducts(
             [FromQuery] int? categoryId,
             [FromQuery] string? search,
-            [FromQuery] bool? aktif)          // ⭐ YENİ — sadece admin için anlamlı
+            [FromQuery] bool? aktif,          // ⭐ YENİ — sadece admin için anlamlı
+            [FromQuery] bool arsiv = false)   // ⭐ YENİ (4.8) — arşivlileri göster
         {
             // Rolü bir kez okuyup değişkene alıyoruz. Aşağıda iki ayrı yerde
             // lazım olacak; her seferinde token'daki claim listesini taramanın
@@ -387,6 +438,30 @@ namespace ETicaretAPI.Controllers
                 query = query.Where(p => p.IsActive == aktif.Value);
             }
 
+            // ⭐ YENİ (4.8) — ARŞİV FİLTRESİ
+            //
+            // ⚠️ Müşteri dalında bu filtreye GEREK YOK ama yine de
+            // koyuyoruz. Sebep: arşivleme ürünü zaten pasife çekiyor,
+            // yani yukarıdaki IsActive filtresi onu şimdiden eliyor.
+            // Ama bu iki kuralın BİRBİRİNE BAĞLI olmasına güvenmek
+            // kırılgan olurdu — yarın "arşivle ama satışta bırak"
+            // diye bir yol açılırsa arşivli ürünler sessizce vitrine
+            // düşerdi. Filtre burada, o bağımlılığı ortadan kaldırıyor.
+            //
+            // Admin tarafında varsayılan false: arşiv, "gözümün
+            // önünden çek" demek.
+            //
+            // ⚠️ ?arsiv=true "SADECE arşivliler" değil, "arşivliler
+            // DE dahil" anlamına geliyor. Sadece-arşiv görünümü
+            // seçmedik: admin bir ürünü arşivden çıkarmak için
+            // aradığında, onu tanıdığı listede (diğer ürünlerin
+            // arasında) bulması daha kolay. Ayrıca arşivli ürünün
+            // rozeti zaten onu ayırt ediyor.
+            if (!adminMi || !arsiv)
+            {
+                query = query.Where(p => !p.ArsivlendiMi);
+            }
+
             if (categoryId.HasValue)
             {
                 query = query.Where(p => p.CategoryId == categoryId.Value);
@@ -408,7 +483,8 @@ namespace ETicaretAPI.Controllers
                     Barcode = p.Barcode,
                     Cost = p.Cost,
                     IsActive = p.IsActive,      // ⭐ YENİ
-                    VatRate = p.VatRate         // ⭐ YENİ
+                    VatRate = p.VatRate,        // ⭐ YENİ
+                    ArsivlendiMi = p.ArsivlendiMi   // ⭐ YENİ (4.8)
                 })
                 .ToListAsync();
 
@@ -427,6 +503,14 @@ namespace ETicaretAPI.Controllers
 
             await ResimleriDoldur(products);
             await PuanlariDoldur(products);
+
+            // ⭐ YENİ (4.8) — silinebilirlik SADECE admin için.
+            // Müşterinin silme diye bir eylemi yok; üç sorguyu onun
+            // isteğinde de çalıştırmak boşuna maliyet olurdu.
+            if (adminMi)
+            {
+                await SilinebilirligiDoldur(products);
+            }
 
             return Ok(products);
         }
@@ -483,7 +567,9 @@ namespace ETicaretAPI.Controllers
 
                 // ⭐ YENİ — KDV oranı. Liste ucunda da dolu geliyor
                 // (Description'ın aksine) — tek int, veri yükü yok.
-                VatRate = product.VatRate
+                VatRate = product.VatRate,
+
+                ArsivlendiMi = product.ArsivlendiMi   // ⭐ YENİ (4.8)
             };
 
             // ⭐ YENİ — liste ucuyla AYNI dönüşüm.
@@ -999,6 +1085,59 @@ namespace ETicaretAPI.Controllers
 
 
 
+        // 🔴 PUT /api/products/5/arsiv — arşivle / arşivden çıkar
+        //
+        // ⚠️ NEDEN /durum'DAN AYRI BİR UÇ?
+        // İkisi farklı sorulara cevap veriyor: /durum "satılsın mı?",
+        // burası "listemde dursun mu?". Tek uçta birleştirseydik
+        // "arşivle ama satışta kalsın" gibi anlamsız bir kombinasyon
+        // çağrılabilir hale gelirdi.
+        //
+        // StatusToggleDto yeniden kullanılıyor — kullanıcı, kupon ve
+        // ürün durumu da aynı DTO'yu kullanıyor.
+        [Authorize(Roles = "admin")]
+        [HttpPut("{id}/arsiv")]
+        public async Task<IActionResult> ToggleArsiv(int id, [FromBody] StatusToggleDto dto)
+        {
+            var urun = await _context.Products.FindAsync(id);
+
+            if (urun == null)
+            {
+                return NotFound(new { mesaj = "Ürün bulunamadı." });
+            }
+
+            urun.ArsivlendiMi = dto.IsActive;
+
+            // ⚠️ ARŞİVLENEN ÜRÜN SATIŞTAN DA KALDIRILIYOR.
+            //
+            // "Arşivli ama hâlâ satışta" bir çelişki: ürün admin
+            // listesinde görünmezken müşteri onu satın alabilirdi ve
+            // gelen siparişi kimse fark etmezdi. Arşiv, satıştan
+            // kaldırmanın bir üst seviyesi — alt seviyeyi de kapsar.
+            //
+            // ⚠️ Tersi OTOMATİK DEĞİL: arşivden çıkarmak ürünü satışa
+            // AÇMIYOR. Açsaydık, aylar önce bilinçli olarak satıştan
+            // kaldırılmış bir ürün arşivden çıkarılır çıkarılmaz
+            // vitrine düşerdi. Satışa açmak ayrı ve bilinçli bir
+            // karar olmalı.
+            if (dto.IsActive)
+            {
+                urun.IsActive = false;
+            }
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                mesaj = dto.IsActive
+                    ? "Ürün arşivlendi. Satıştan da kaldırıldı."
+                    : "Ürün arşivden çıkarıldı. Satışa açmak için ayrıca durumunu değiştirmelisin.",
+                arsivlendiMi = urun.ArsivlendiMi,
+                isActive = urun.IsActive
+            });
+        }
+
+
         // 🔴 PUT /api/products/5/durum — satışa aç / satıştan kaldır
         //
         // Neden ayrı endpoint? PUT /api/products/5 zaten aktifliği yazıyor,
@@ -1039,6 +1178,25 @@ namespace ETicaretAPI.Controllers
 
 
         // 🔴 DELETE /api/products/5
+        //
+        // ⚠️ ARTIK HER ÜRÜN SİLİNEMİYOR (4.8).
+        //
+        // Bu uç eskiden koşulsuz fiziksel silme yapıyordu ve
+        // veritabanında ölçülebilir hasar bıraktı: 2 silinmiş ürün,
+        // 4 sahipsiz sipariş kalemi, 3 sahipsiz favori, 2 sahipsiz
+        // stok hareketi. Yorumlar ise geri getirilemez şekilde gitti
+        // (Reviews'ın gerçek bir FK'sı ve OnDelete(Cascade) tanımı
+        // var — ürün silinince yorumlar da silindi, kaç tane olduğu
+        // artık bilinemiyor).
+        //
+        // Hatanın bugüne kadar patlamamasının sebebi dondurma deseni:
+        // OrderItem'da ad, fiyat, maliyet ve KDV oranı dondurulmuş
+        // olduğu için sipariş geçmişi doğru görünmeye devam etti.
+        // Yani dondurma bu hatayı MASKELEDİ, düzeltmedi.
+        //
+        // Kural: İŞLEM GEÇMİŞİ OLAN ÜRÜN FİZİKSEL OLARAK SİLİNMEZ.
+        // Fiziksel silme yalnızca "yanlışlıkla oluşturuldu, hiç
+        // kullanılmadı" durumu için.
         [Authorize(Roles = "admin")]
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteProduct(int id)
@@ -1048,6 +1206,55 @@ namespace ETicaretAPI.Controllers
             if (product == null)
             {
                 return NotFound(new { mesaj = "Silinecek ürün zaten yok!" });
+            }
+
+            // ---------- GEÇMİŞ KONTROLÜ ----------
+            //
+            // Üç tablo da ticari/denetim kaydı: sipariş kalemleri
+            // (ne satıldı), yorumlar (müşteri ne dedi), stok defteri
+            // (stok neden değişti).
+            //
+            // ⚠️ Favorites ve StockAlerts BİLEREK sayılmıyor.
+            // Onlar bir NİYET kaydı, bir işlem değil: "bu ürünü
+            // beğenmiştim", "gelince haber ver". Ürün gerçekten
+            // silinebilir durumdaysa bu satırların kaybolması bir
+            // veri kaybı sayılmaz ve müşteriye de bir şey ifade
+            // etmez. Onları da saysaydık, tek bir favorileme yüzünden
+            // hiç satılmamış bir ürün silinemez hale gelirdi.
+            var siparisAdedi = await _context.OrderItems
+                .CountAsync(oi => oi.ProductId == id);
+
+            var yorumAdedi = await _context.Reviews
+                .CountAsync(r => r.ProductId == id);
+
+            var hareketAdedi = await _context.StockMovements
+                .CountAsync(sm => sm.ProductId == id);
+
+            if (siparisAdedi > 0 || yorumAdedi > 0 || hareketAdedi > 0)
+            {
+                // ⚠️ MESAJ SAYILARI İÇERİYOR.
+                // "Bu ürün silinemez" demek adminin sadece elini
+                // bağlar; NEDEN silinemediğini ve bunun yerine ne
+                // yapabileceğini söylemek ona bir yol gösteriyor.
+                var sebepler = new List<string>();
+
+                if (siparisAdedi > 0) sebepler.Add($"{siparisAdedi} sipariş kalemi");
+                if (yorumAdedi > 0) sebepler.Add($"{yorumAdedi} yorum");
+                if (hareketAdedi > 0) sebepler.Add($"{hareketAdedi} stok hareketi");
+
+                // 409 Conflict: istek geçerli ama kaynağın MEVCUT
+                // DURUMU onu imkânsız kılıyor. 400 (hatalı istek)
+                // değil — istekte yanlış bir şey yok. 403 de değil —
+                // adminin yetkisi var, engel yetki değil veri.
+                return Conflict(new
+                {
+                    mesaj = $"Bu ürün {string.Join(", ", sebepler)} ile ilişkili, silinemez. "
+                          + "Satıştan kaldırabilir veya arşivleyebilirsin.",
+                    silinemez = true,
+                    siparisAdedi,
+                    yorumAdedi,
+                    hareketAdedi
+                });
             }
 
             // Ürünün resimlerini hem diskten hem veritabanından temizle

@@ -125,5 +125,36 @@
         // sorusunun cevabı da yok. Mobil misafiri zaten giriş
         // ekranına yönlendiriyor.
         public bool StokBildirimiVar { get; set; }
+
+
+        // ⭐ YENİ (4.8) — ürün arşivlendi mi?
+        //
+        // Tüketicisi yalnızca admin paneli: listede rozet, butonun
+        // "Sil" mi "Arşivle" mi olacağı kararı.
+        //
+        // Müşteriye giden cevaplarda her zaman false — arşivli ürün
+        // zaten müşteri listesine hiç girmiyor. IsActive'deki
+        // gerekçenin aynısı: gizlemenin koruduğu bir şey yok,
+        // gereksiz özel durum yaratmış oluruz.
+        public bool ArsivlendiMi { get; set; }
+
+
+        // ⭐ YENİ (4.8) — bu ürün FİZİKSEL olarak silinebilir mi?
+        //
+        // false = ürünün işlem geçmişi var (sipariş kalemi, yorum ya
+        // da stok hareketi). Panel bu üründe "Sil" yerine "Arşivle"
+        // gösteriyor.
+        //
+        // ⚠️ BU BİR KOLAYLIK, KURAL DEĞİL.
+        // Asıl kilit DELETE ucunda: geçmişi olan ürün 409 ile
+        // reddediliyor. Buradaki alan yalnızca adminin basamayacağı
+        // bir butona bakmasını önlüyor. Liste yüklendikten sonra
+        // ürüne sipariş gelirse bu değer bayatlar ve sunucu yine de
+        // reddeder — doğru davranış.
+        //
+        // ⚠️ Yalnızca admin isteklerinde dolduruluyor; müşteriye
+        // giden cevaplarda her zaman false. Müşterinin silme diye bir
+        // eylemi yok, hesaplamak boşuna sorgu olurdu.
+        public bool SilinebilirMi { get; set; }
     }
 }

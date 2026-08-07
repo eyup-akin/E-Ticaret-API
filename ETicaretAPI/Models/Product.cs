@@ -90,5 +90,38 @@
         // açıklama pazarlama metnidir, KDV oranı ise faturanın parçasıdır.
         // Oran yasayla değişirse eski faturaların bozulmaması gerekir.
         public int VatRate { get; set; } = 20;
+
+
+        // ⭐ YENİ (4.8) — ARŞİVLENDİ Mİ?
+        //
+        // ⚠️ BU, IsActive'İN İKİZİ DEĞİL — ÜÇÜNCÜ BİR SEVİYE.
+        //
+        // Üç seviye var ve üçü FARKLI sorulara cevap veriyor:
+        //
+        //   IsActive = false  → "vitrinden çek"
+        //       Müşteri göremez, satın alamaz. Admin listesinde
+        //       DURUR çünkü yarın tekrar satışa açılabilir.
+        //       Geçici bir karar.
+        //
+        //   ArsivlendiMi = true → "gözümün önünden çek"
+        //       Admin listesinde de görünmez. Ürün bir daha
+        //       satılmayacak ama satırı duruyor: geçmiş siparişler,
+        //       yorumlar ve stok defteri ona bağlı.
+        //       Kalıcı ama geri alınabilir bir karar.
+        //
+        //   Fiziksel silme → satır yok olur
+        //       Yalnızca "yanlışlıkla oluşturuldu, hiç kullanılmadı"
+        //       durumu için. İşlem geçmişi olan ürün silinemez.
+        //
+        // İkisini tek alana sıkıştırmak (örn. bir "durum" enum'u)
+        // mümkündü ama yanlış olurdu: bir ürün AYNI ANDA hem pasif
+        // hem arşivli olabilir ve tek alan bu ikisini birden
+        // anlatamaz.
+        //
+        // ⚠️ nullable DEĞİL, varsayılan false. "Bilinmiyor" diye bir
+        // durum yok — IsActive ve VatRate'teki gerekçenin aynısı.
+        // Mevcut ürünlerin hepsi arşivsiz doğuyor ve bu uydurma
+        // değil: bugüne kadar arşiv diye bir kavram yoktu.
+        public bool ArsivlendiMi { get; set; } = false;
     }
 }

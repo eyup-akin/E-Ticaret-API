@@ -404,19 +404,83 @@ namespace ETicaretAPI.Controllers
         //  ÜRÜN ENDPOINT'LERİ
         // ==========================================================
 
-        // 🟢 GET /api/products?categoryId=2&search=nike&aktif=false
-        [HttpGet]
-        public async Task<IActionResult> GetProducts(
-            [FromQuery] int? categoryId,
-            [FromQuery] string? search,
-            [FromQuery] bool? aktif,          // ⭐ YENİ — sadece admin için anlamlı
-            [FromQuery] bool arsiv = false)   // ⭐ YENİ (4.8) — arşivlileri göster
+        // ⭐ YENİ (6.1) — SIRALAMA BEYAZ LİSTESİ
+        //
+        // ⚠️ NEDEN SABİT LİSTE, NEDEN GELEN METNİ ALAN ADINA ÇEVİRMİYORUZ?
+        //
+        // "siralama" istekten geliyor. Gelen metni doğrudan bir sütun
+        // adına çevirseydik istemci `?siralama=Cost` yazıp MALİYETE göre
+        // sıralatabilirdi. Cost'u JSON'dan siliyoruz ama sıralama onu
+        // geri sızdırırdı: listeyi maliyete göre sıralayıp "en pahalıya
+        // mal olan ürün hangisi" sorusu cevaplanabilirdi. Veriyi
+        // gizlemek yetmez, veriden TÜRETİLEN her sinyali de kapatmak
+        // gerekir — gizli yorumların ortalamaya girmemesiyle aynı kural.
+        //
+        // Listede olmayan her değer sessizce varsayılana düşer; hata
+        // dönmüyoruz çünkü bozuk bir sıralama parametresi müşterinin
+        // ürün görmesini engellememeli.
+        private static readonly string[] GecerliSiralamalar =
         {
-            // Rolü bir kez okuyup değişkene alıyoruz. Aşağıda iki ayrı yerde
-            // lazım olacak; her seferinde token'daki claim listesini taramanın
-            // anlamı yok.
-            var adminMi = User.IsInRole("admin");
+            "fiyat_artan", "fiyat_azalan", "yeni", "populer", "puan"
+        };
 
+
+        // ⭐ YENİ (6.1) — VİRGÜLLÜ ID LİSTESİNİ AYRIŞTIR ("1,3,7")
+        //
+        // Bozuk parçalar sessizce atılıyor: "1,abc,3" → [1, 3]. Hata
+        // dönmemenin sebebi yukarıdakiyle aynı — filtre parametresi
+        // müşterinin ürün görmesini engelleyen bir şey olmamalı.
+        //
+        // ⚠️ Distinct() gerekli: "2,2,2" gelirse EF'e üç kopya parametre
+        // gitmesinin anlamı yok.
+        private static List<int> IdListesiAyristir(string? metin)
+        {
+            if (string.IsNullOrWhiteSpace(metin))
+            {
+                return new List<int>();
+            }
+
+            return metin
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(parca => int.TryParse(parca, out var id) ? id : (int?)null)
+                .Where(id => id.HasValue)
+                .Select(id => id!.Value)
+                .Distinct()
+                .Take(50)   // kategori sayısı hiçbir zaman bu kadar olmayacak; sınır kötü niyetli isteğe karşı
+                .ToList();
+        }
+
+
+        // ⭐ YENİ (6.1) — FİLTRELERİ KURAN ORTAK YER
+        //
+        // ⚠️ NEDEN AYRI METOT?
+        //
+        // İki uç aynı filtre kümesini kullanıyor: liste (GetProducts) ve
+        // sayaç (GetUrunSayisi). İkisine ayrı ayrı yazsaydık, sayaç
+        // "47 ürün" der ama listeye basınca 52 ürün çıkardı — panelde
+        // gösterilen sayı ile listenin çelişmesi, sayının hiç olmamasından
+        // kötü olurdu. Filtre TEK yerde kuruluyor.
+        //
+        // ⚠️ IQueryable döndürüyor, List değil: sorgu henüz veritabanına
+        // gitmedi. Çağıran taraf sıralama ve projeksiyon ekliyor, hepsi
+        // tek SQL'e derleniyor. (ReportsController.GecerliSiparisler ile
+        // aynı desen.)
+        //
+        // ⚠️ SIRALAMA BURADA YOK — bilerek. Sayaç için sıralama hem
+        // gereksiz hem maliyetli: COUNT(*) alırken satırları sıraya
+        // dizmenin hiçbir faydası yok.
+        private IQueryable<Product> UrunSorgusuKur(
+            bool adminMi,
+            int? categoryId,
+            string? search,
+            bool? aktif,
+            bool arsiv,
+            decimal? minFiyat,
+            decimal? maxFiyat,
+            string? kategoriler,
+            double? minPuan,
+            bool sadeceStokta)
+        {
             var query = _context.Products.AsQueryable();
 
             // ⭐ YENİ — GÖRÜNÜRLÜK KİLİDİ
@@ -462,15 +526,132 @@ namespace ETicaretAPI.Controllers
                 query = query.Where(p => !p.ArsivlendiMi);
             }
 
-            if (categoryId.HasValue)
+            // ⭐ DEĞİŞTİ (6.1) — TEK KATEGORİ mi, ÇOKLU KATEGORİ mi?
+            //
+            // İkisi de AYNI boyutu filtreliyor, o yüzden birlikte
+            // uygulanmıyorlar: "kategoriler" doluysa o kazanır.
+            //
+            // ⚠️ Neden ikisi birden AND'lenmedi? "categoryId=2 &
+            // kategoriler=3,5" isteğinde kesişim BOŞ küme olurdu ve
+            // ekranda sebepsiz yere "ürün bulunamadı" çıkardı.
+            // Neden "categoryId" silinip yerine tek parametre
+            // konulmadı? Çünkü admin paneli ve mobildeki kategori
+            // ekranı onu kullanıyor; silmek üç katmanda kırılma
+            // yaratırdı ve bu aşamanın işi değil.
+            var kategoriIdler = IdListesiAyristir(kategoriler);
+
+            if (kategoriIdler.Count > 0)
+            {
+                query = query.Where(p => kategoriIdler.Contains(p.CategoryId));
+            }
+            else if (categoryId.HasValue)
             {
                 query = query.Where(p => p.CategoryId == categoryId.Value);
             }
 
+            // ⭐ DEĞİŞTİ (6.1) — arama artık AÇIKLAMADA da geçiyor.
+            //
+            // Aşama 2'de eklenen Description arama dışında kalmıştı:
+            // "pamuklu" diye arayan müşteri, kelimesi açıklamada geçen
+            // ürünü bulamıyordu.
+            //
+            // ⚠️ Description nullable — null kontrolü şart. EF bunu
+            // SQL'e çeviriyor ve SQL'de NULL LIKE '%x%' zaten NULL
+            // (yani false) dönerdi, ama kontrolü yazmak niyeti açık
+            // ediyor ve sağlayıcı değişirse davranış sabit kalıyor.
             if (!string.IsNullOrEmpty(search))
             {
-                query = query.Where(p => p.Name.Contains(search));
+                query = query.Where(p =>
+                    p.Name.Contains(search) ||
+                    (p.Description != null && p.Description.Contains(search)));
             }
+
+            // ⭐ YENİ (6.1) — FİYAT ARALIĞI
+            //
+            // ⚠️ Fiyatlar KDV DAHİL (Aşama 4.3). Müşteri ekranda hangi
+            // sayıyı görüyorsa aralık ona göre süzüyor; matrah üzerinden
+            // filtrelemek "500 TL'ye kadar" diyen müşteriye 600 TL'lik
+            // ürün gösterirdi.
+            //
+            // min > max gelirse sonuç boş küme olur. Bunu hata saymıyoruz:
+            // istemci kaydırıcıyı öyle bıraktıysa "böyle ürün yok" doğru
+            // cevaptır.
+            if (minFiyat.HasValue)
+            {
+                query = query.Where(p => p.Price >= minFiyat.Value);
+            }
+
+            if (maxFiyat.HasValue)
+            {
+                query = query.Where(p => p.Price <= maxFiyat.Value);
+            }
+
+            // ⭐ YENİ (6.1) — SADECE STOKTA OLANLAR
+            //
+            // ⚠️ Ham stok müşteriye gitmiyor ama SÜZMEK sorun değil:
+            // "stokta var mı" bilgisi zaten StokDurumu ile gönderiliyor.
+            // Sızan bir şey yok, gizlenen sayı yine gizli.
+            if (sadeceStokta)
+            {
+                query = query.Where(p => p.Stock > 0);
+            }
+
+            // ⭐ YENİ (6.1) — EN AZ ŞU KADAR PUAN
+            //
+            // ⚠️ GİZLİ YORUMLAR ORTALAMAYA GİRMİYOR (IsHidden == false).
+            // PuanlariDoldur ile AYNI kural — farklı olsaydı listede
+            // "4,2 puan" yazan ürün "min 4 puan" filtresinde
+            // kaybolabilirdi. Bir kaydı görünürlükten çıkarıyorsan
+            // ondan TÜRETİLEN her şeyi de çıkarmalısın.
+            //
+            // ⚠️ HİÇ YORUMU OLMAYAN ÜRÜN ELENİR — bilerek.
+            // Average() boş kümede null döner, null >= 4 ise false.
+            // "En az 4 yıldız" diyen müşteri, puanı OLAN ürün istiyor;
+            // puansız ürünü listeye koymak "bu ürün 4+ puanlı" demek
+            // olurdu ve bu yanlış bir iddia olurdu.
+            //
+            // (double?) dönüşümü şart: Rating int, cast edilmezse EF
+            // boş kümede 0 üretir ve puansız ürünler "0 puan" sayılırdı.
+            if (minPuan.HasValue)
+            {
+                var esik = minPuan.Value;
+
+                query = query.Where(p =>
+                    _context.Reviews
+                        .Where(r => r.ProductId == p.Id && !r.IsHidden)
+                        .Average(r => (double?)r.Rating) >= esik);
+            }
+
+            return query;
+        }
+
+
+        // 🟢 GET /api/products?categoryId=2&search=nike&aktif=false
+        //    &minFiyat=100&maxFiyat=500&kategoriler=1,3&minPuan=4
+        //    &sadeceStokta=true&siralama=fiyat_artan
+        [HttpGet]
+        public async Task<IActionResult> GetProducts(
+            [FromQuery] int? categoryId,
+            [FromQuery] string? search,
+            [FromQuery] bool? aktif,          // ⭐ YENİ — sadece admin için anlamlı
+            [FromQuery] bool arsiv = false,   // ⭐ YENİ (4.8) — arşivlileri göster
+            [FromQuery] decimal? minFiyat = null,     // ⭐ YENİ (6.1)
+            [FromQuery] decimal? maxFiyat = null,     // ⭐ YENİ (6.1)
+            [FromQuery] string? kategoriler = null,   // ⭐ YENİ (6.1)
+            [FromQuery] double? minPuan = null,       // ⭐ YENİ (6.1)
+            [FromQuery] bool sadeceStokta = false,    // ⭐ YENİ (6.1)
+            [FromQuery] string? siralama = null)      // ⭐ YENİ (6.1)
+        {
+            // Rolü bir kez okuyup değişkene alıyoruz. Aşağıda iki ayrı yerde
+            // lazım olacak; her seferinde token'daki claim listesini taramanın
+            // anlamı yok.
+            var adminMi = User.IsInRole("admin");
+
+            var query = UrunSorgusuKur(
+                adminMi, categoryId, search, aktif, arsiv,
+                minFiyat, maxFiyat, kategoriler, minPuan, sadeceStokta);
+
+            query = SiralamayiUygula(query, siralama);
 
             var products = await query
                 .Select(p => new ProductDto
@@ -513,6 +694,193 @@ namespace ETicaretAPI.Controllers
             }
 
             return Ok(products);
+        }
+
+
+        // ⭐ YENİ (6.1) — SIRALAMA
+        //
+        // ⚠️ Beyaz liste dışındaki her değer (ve null) varsayılana düşer.
+        // Varsayılan "yeni": vitrinde en son eklenen ürün önde olsun.
+        //
+        // ⚠️ "yeni" NEDEN Id'YE GÖRE, NEDEN BİR TARİH ALANINA GÖRE DEĞİL?
+        //
+        // Product'ta oluşturulma tarihi YOK. Bir migration ile eklemek
+        // akla geliyor ama SIRALAMA için gereksiz: Id bir identity
+        // sütunu, yani artan sırada dağıtılıyor. "Hangi ürün daha yeni"
+        // sorusunun cevabı Id karşılaştırmasında zaten tam doğru.
+        //
+        // Tarih alanı ancak "son 30 günde eklenenler" gibi bir EŞİK
+        // gerektiğinde şart olur — Id ile "30 gün" diye bir şey
+        // sorulamaz. O ihtiyaç Aşama 7'de (ana sayfa "Yeni gelenler"
+        // bölümü) doğuyor ve migration orada alınacak. Bugün almak,
+        // eski ürünlerin tarihini UYDURMAK zorunda bırakırdı: hepsine
+        // bugünü yazmak "tüm katalog bugün eklendi" demek olurdu.
+        //
+        // ⚠️ HER SIRALAMA Id İLE BİTİYOR. Sebebi eşitlik: aynı fiyattan
+        // 12 ürün varsa SQL'in sıra garantisi yoktur ve liste her
+        // istekte farklı gelebilir. Sayfalama eklendiğinde bu, aynı
+        // ürünün iki sayfada birden çıkmasına yol açardı. Id son
+        // kırıcı olarak sırayı kararlı yapıyor.
+        private IQueryable<Product> SiralamayiUygula(IQueryable<Product> query, string? siralama)
+        {
+            if (siralama == null || !GecerliSiralamalar.Contains(siralama))
+            {
+                siralama = "yeni";
+            }
+
+            switch (siralama)
+            {
+                case "fiyat_artan":
+                    return query.OrderBy(p => p.Price).ThenBy(p => p.Id);
+
+                case "fiyat_azalan":
+                    return query.OrderByDescending(p => p.Price).ThenBy(p => p.Id);
+
+                case "puan":
+                    // ⚠️ Puansız ürün EN SONA düşüyor (?? 0), elenmiyor.
+                    // minPuan filtresinden farkı bu: orada müşteri
+                    // "puanı şu kadar olsun" diyor, burada sadece
+                    // "iyi puanlılar önde olsun" diyor. Puansız ürünü
+                    // listeden atmak, sıralama değiştirmenin sessizce
+                    // ürün gizlemesi olurdu.
+                    return query
+                        .OrderByDescending(p => _context.Reviews
+                            .Where(r => r.ProductId == p.Id && !r.IsHidden)
+                            .Average(r => (double?)r.Rating) ?? 0)
+                        .ThenBy(p => p.Id);
+
+                case "populer":
+                    // ⚠️ İPTAL EDİLEN SİPARİŞLER SAYILMIYOR.
+                    // Sayılsaydı hiç teslim edilmemiş bir ürün "en çok
+                    // satan" olabilirdi. Aynı kural ReportsController'da
+                    // ciro hesabında da var; oradaki yardımcı tarih
+                    // aralığına bağlı olduğu için buradan çağrılamıyor.
+                    // "iptal" metni artık üçüncü dosyada geçiyor —
+                    // durum sabitlerinin ortak bir yere toplanması
+                    // Aşama 11 teknik borç listesine yazıldı.
+                    //
+                    // ⚠️ Adet toplanıyor, sipariş SAYISI değil: 1 kişinin
+                    // 50 adet alması ile 50 kişinin 1'er adet alması
+                    // popülerlik olarak aynı sayılmıyor derdi varsa
+                    // ayrı bir ölçü gerekir; bugün "kaç adet satıldı"
+                    // yeterli ve anlaşılır.
+                    return query
+                        .OrderByDescending(p => _context.OrderItems
+                            .Where(oi => oi.ProductId == p.Id
+                                      && _context.Orders.Any(o => o.Id == oi.OrderId
+                                                               && o.Status != "iptal"))
+                            .Sum(oi => (int?)oi.Quantity) ?? 0)
+                        .ThenBy(p => p.Id);
+
+                default: // "yeni"
+                    return query.OrderByDescending(p => p.Id);
+            }
+        }
+
+
+        // ⭐ YENİ (6.2) — 🟢 GET /api/products/sayi?...  →  { toplam: 47 }
+        //
+        // Filtre panelindeki "47 ürünü göster" butonu için. Müşteri
+        // kaydırıcıyı oynatırken sonucun kaç ürün olacağını UYGULAMADAN
+        // görüyor.
+        //
+        // ⚠️ NEDEN AYRI UÇ, NEDEN LİSTE UCU { toplam, urunler } DÖNMÜYOR?
+        //
+        // Yol haritası 6.2'de liste cevabının `{ toplam, urunler }`
+        // şeklinde sarmalanması yazıyordu. Uygulamada iki sebeple
+        // ayrı uç seçildi:
+        //
+        //   1) Sarmalamak KIRICI bir değişiklik olurdu. Bugün
+        //      GET /api/products düz dizi dönüyor ve bunu admin paneli
+        //      ile mobilin dört ayrı ekranı tüketiyor. Aşama 6'nın
+        //      planında admin işi YOK; cevabı sarmalamak admin panelini
+        //      bu aşamanın kapsamı dışında kırardı.
+        //   2) Sarmalanmış "toplam" bugün urunler.Count'a EŞİT olurdu —
+        //      sayfalama yok. Yani türetilebilen bir değeri ayrıca
+        //      taşımak olurdu. Sayının bağımsız bir değeri ancak listeyi
+        //      İSTEMEDİĞİN durumda var, o durum da tam olarak burası.
+        //
+        // ⚠️ Ayrıca ucuz: panel her kaydırıcı hareketinde tam ürün
+        // listesini (resimler, puanlar, silinebilirlik) çekmiyor;
+        // COUNT(*) dönüyor.
+        //
+        // ⚠️ Rota çakışması yok: "sayi" düz metin bir segment ve
+        // ASP.NET Core yönlendirmesinde düz metin, {id} gibi
+        // parametreli segmentten önce gelir.
+        [HttpGet("sayi")]
+        public async Task<IActionResult> GetUrunSayisi(
+            [FromQuery] int? categoryId,
+            [FromQuery] string? search,
+            [FromQuery] bool? aktif,
+            [FromQuery] bool arsiv = false,
+            [FromQuery] decimal? minFiyat = null,
+            [FromQuery] decimal? maxFiyat = null,
+            [FromQuery] string? kategoriler = null,
+            [FromQuery] double? minPuan = null,
+            [FromQuery] bool sadeceStokta = false)
+        {
+            // ⚠️ Rol burada da okunuyor: sayaç, listenin göreceğinden
+            // BAŞKA bir sayı vermemeli. Misafire "47 ürün" deyip 31
+            // ürün göstermek, pasif ürünlerin varlığını sızdırırdı.
+            var adminMi = User.IsInRole("admin");
+
+            var query = UrunSorgusuKur(
+                adminMi, categoryId, search, aktif, arsiv,
+                minFiyat, maxFiyat, kategoriler, minPuan, sadeceStokta);
+
+            var toplam = await query.CountAsync();
+
+            return Ok(new { toplam });
+        }
+
+
+        // ⭐ YENİ (6.3) — 🟢 GET /api/products/fiyat-araligi
+        //                  →  { enDusuk: 89.9, enYuksek: 4499.9 }
+        //
+        // Mobildeki çift uçlu fiyat kaydırıcısının uçları. İstemcide sabit
+        // yazsaydık (0–10.000 gibi) katalog değiştiğinde kaydırıcının yarısı
+        // ölü bölge olurdu ya da en pahalı ürün aralığın dışında kalırdı.
+        //
+        // ⚠️ DİĞER FİLTRELERİ BİLEREK ALMIYOR — parametresiz.
+        //
+        // "Seçili kategoriye göre daralsın" mantıklı görünüyor ama
+        // kaydırıcıyı SÜRÜKLERKEN uçların değişmesi demek olurdu:
+        // parmağın altındaki tutamak yerinden kayar, seçilen değer
+        // kendiliğinden başka bir sayıya döner. Sabit uç, dar uçtan iyi.
+        //
+        // ⚠️ Görünürlük kilidi burada da geçerli: misafire pasif ürünün
+        // fiyatı üzerinden bir üst sınır vermek, o ürünün varlığını
+        // sızdırırdı.
+        //
+        // ⚠️ Katalog boşsa Min/Max SQL'de NULL döner — (decimal?) cast'i
+        // bu yüzden şart, yoksa EF "sequence contains no elements" ile
+        // patlardı. Boş katalogda 0–0 dönüyoruz; kaydırıcı da o zaman
+        // zaten gösterilmiyor.
+        [HttpGet("fiyat-araligi")]
+        public async Task<IActionResult> GetFiyatAraligi()
+        {
+            var adminMi = User.IsInRole("admin");
+
+            var query = UrunSorgusuKur(
+                adminMi,
+                categoryId: null, search: null, aktif: null, arsiv: false,
+                minFiyat: null, maxFiyat: null, kategoriler: null,
+                minPuan: null, sadeceStokta: false);
+
+            var sinirlar = await query
+                .GroupBy(p => 1)
+                .Select(g => new
+                {
+                    EnDusuk = g.Min(p => (decimal?)p.Price),
+                    EnYuksek = g.Max(p => (decimal?)p.Price)
+                })
+                .FirstOrDefaultAsync();
+
+            return Ok(new
+            {
+                enDusuk = sinirlar?.EnDusuk ?? 0m,
+                enYuksek = sinirlar?.EnYuksek ?? 0m
+            });
         }
 
 

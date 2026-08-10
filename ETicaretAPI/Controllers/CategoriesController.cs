@@ -22,7 +22,33 @@ namespace ETicaretAPI.Controllers
         [HttpGet]
         public async Task<IActionResult> GetCategories()
         {
-            // Her kategorinin ürün sayısını da getiriyoruz.
+            // ⭐ DEĞİŞTİ (GV/Faz 5) — SAYAÇ ARTIK MÜŞTERİNİN GÖRDÜĞÜNÜ SAYIYOR.
+            //
+            // ⚠️ BU BİR HATA DÜZELTMESİYDİ VE ÖLÇÜLDÜ.
+            //
+            // Sayım hiçbir görünürlük koşulu içermiyordu: pasif ve
+            // arşivli ürünler de sayılıyordu. Sonuç, ekranda
+            // birbiriyle çelişen iki sayı:
+            //
+            //     "Elektronik (15)"  →  içeri girince 6 ürün
+            //     Toplam 52 diyordu  →  müşteri 36 ürün görüyordu
+            //
+            // Bu, projede en çok kaçındığımız şeyin ta kendisi:
+            // ekranda yazan sayının listeyle çelişmesi. Filtre
+            // panelindeki sayaç için 28 senaryo yazmıştık, burada
+            // aynı hata açıkta duruyordu.
+            //
+            // ⚠️ Koşullar ProductsController.UrunSorgusuKur'daki
+            // müşteri dalıyla AYNI olmak zorunda. Orada değişirse
+            // burası da değişmeli — üçüncü bir tüketici çıkarsa
+            // koşul ortak bir yere taşınmalı.
+            //
+            // ⚠️ Bu uç ADMIN için de aynı sayıyı döndürüyor. Panelde
+            // kategori başına "kaç ürün var" bilgisi bir yönetim
+            // sayısı değil, gezinme yardımı; ayrıca admin ürün
+            // listesinde gerçek sayıyı zaten görüyor. Rol ayrımı
+            // eklemek, aynı ucun iki farklı sayı döndürmesi demekti.
+            //
             // DİKKAT: Bunu tek sorguda yapıyoruz.
             // Yanlış yol: önce kategorileri çek, sonra her biri için ayrı COUNT sorgusu at
             // (5 kategori = 6 sorgu → "N+1 problemi"). SQL bunu tek seferde yapabilir.
@@ -31,7 +57,8 @@ namespace ETicaretAPI.Controllers
                 {
                     Id = c.Id,
                     Name = c.Name,
-                    ProductCount = _context.Products.Count(p => p.CategoryId == c.Id)
+                    ProductCount = _context.Products
+                        .Count(p => p.CategoryId == c.Id && p.IsActive && !p.ArsivlendiMi)
                 })
                 .ToListAsync();
 

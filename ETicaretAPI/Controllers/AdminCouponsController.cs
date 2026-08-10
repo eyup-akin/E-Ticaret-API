@@ -5,6 +5,7 @@ using System.Security.Claims;
 using ETicaretAPI.Data;
 using ETicaretAPI.Models;
 using ETicaretAPI.DTOs;
+using ETicaretAPI.Services;   // ⭐ KuponServisi.KoduNormallestir
 
 namespace ETicaretAPI.Controllers
 {
@@ -302,7 +303,14 @@ namespace ETicaretAPI.Controllers
             // normalizasyonu yapıyor — ikisi aynı olmak ZORUNDA.
             // Farklı olsalardı "indirim10" diye kaydedilen kupon
             // "INDIRIM10" aramasında bulunamazdı.
-            var temizKod = dto.Code.Trim().ToUpperInvariant();
+            // ⚠️ Normalleştirme KuponServisi'nden çağrılıyor, burada
+            // ikinci bir kopyası yok. Doğrulama tarafıyla aynı kuralı
+            // uygulamak zorunda: farklı olsalardı admin'in kaydettiği
+            // kod ile müşterinin aradığı kod tutmazdı.
+            //
+            // ⚠️ Türkçe harfler ASCII'ye indirgeniyor — gerekçesi
+            // KuponServisi.KoduNormallestir'de yazılı.
+            var temizKod = KuponServisi.KoduNormallestir(dto.Code);
 
             // "İş kuralı" doğrulaması — şekil değil, anlam kontrolü.
             var hata = await KurallariDogrulaAsync(

@@ -44,6 +44,61 @@ namespace ETicaretAPI.Controllers
             return int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
         }
 
+        // ⭐ YENİ — 🟡 GET /api/coupons/{kod}
+        //
+        // Kampanya detay ekranı için: kuponun KOŞULLARINI gösterir,
+        // sepetle ilgilenmez.
+        //
+        // ⚠️ NEDEN "dogrula" YETMİYOR?
+        // O uç sepete bakıyor ve "şu an ne kadar iner" diyor.
+        // Kampanya ekranında sepet yok; sorulan soru "bu kupon ne
+        // vaat ediyor". Sepetsiz çağırmak için dogrula'yı esnetmek,
+        // tek metodu iki farklı işe koşmak olurdu.
+        //
+        // ⚠️ NE DÖNMÜYOR — bilerek:
+        //   • UsedCount / UsageLimit → kaç kişi kullandı bilgisi
+        //     mağazanın işi; müşteriye "3 kişi kaldı" demek bir
+        //     aciliyet oyunu ve elimizde onu doğru gösterecek
+        //     canlı bir sayaç yok
+        //   • CreatedByUserId → tamamen iç bilgi
+        //
+        // ⚠️ Kupon YOKSA 404. Kampanya ekranı o kartı hiç çizmiyor;
+        // "kupon bulunamadı" diye boş bir kutu göstermek müşteriye
+        // yapabileceği bir şey sunmazdı.
+        //
+        // ⚠️ Kod normalleştirilerek aranıyor — müşteri afişteki
+        // Türkçe karakterli hâlini yazsa da bulunsun.
+        [HttpGet("{kod}")]
+        public async Task<IActionResult> KuponuGetir(string kod)
+        {
+            var temizKod = KuponServisi.KoduNormallestir(kod);
+
+            var kupon = await _context.Coupons
+                .Where(c => c.Code == temizKod && c.IsActive)
+                .Select(c => new
+                {
+                    c.Id,
+                    c.Code,
+                    c.Description,
+                    c.DiscountType,
+                    c.DiscountValue,
+                    c.MinOrderAmount,
+                    c.MaxDiscountAmount,
+                    c.StartsAt,
+                    c.EndsAt,
+                    c.CategoryId,
+                    c.IndirimliUrunlerdeGecerli
+                })
+                .FirstOrDefaultAsync();
+
+            if (kupon == null)
+            {
+                return NotFound(new { mesaj = "Kupon bulunamadı." });
+            }
+
+            return Ok(kupon);
+        }
+
         // 🟡 POST /api/coupons/dogrula — sepette kupon dene
         //
         // Kuponu UYGULAMIYOR, sadece "geçerli mi ve ne kadar iner" diyor.

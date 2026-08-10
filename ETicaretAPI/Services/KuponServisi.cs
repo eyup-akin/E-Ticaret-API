@@ -52,6 +52,56 @@ namespace ETicaretAPI.Services
 
         // Kuponu baştan sona doğrular ve indirim tutarını hesaplar.
         //
+        // ⭐ YENİ — KUPON KODU NORMALLEŞTİRME
+        //
+        // ⚠️ İKİ TÜKETİCİSİ VAR ve ikisi de AYNI kuralı uygulamak
+        // zorunda: burada (doğrulama) ve AdminCouponsController'da
+        // (oluşturma). Farklı olsalardı admin'in kaydettiği kod ile
+        // müşterinin aradığı kod tutmaz, kupon "yok" görünürdü.
+        // İkisi de bu metodu çağırıyor.
+        //
+        // ⚠️⚠️ ToUpperInvariant TEK BAŞINA TÜRKÇE'DE YANLIŞ ÇALIŞIR.
+        //
+        // Ölçüldü:
+        //     "ilkadım50".ToUpperInvariant()  →  "ILKADIM50"   (noktasız I)
+        //     "İLKADIM50" ise                →  "İLKADIM50"   (noktalı İ)
+        //
+        // Yani müşteri kuponu küçük harfle yazarsa kod eşleşmiyor ve
+        // ekranda "Böyle bir kupon yok" çıkıyor. Kampanya afişinde
+        // "İLKADIM50" yazan bir kuponu kimse kullanamazdı.
+        //
+        // ⚠️ Çözüm: ÖNCE Türkçe harfleri ASCII karşılığına indir,
+        // SONRA büyüt. Böylece "ilkadım50", "İLKADIM50", "ilkadim50"
+        // ve "İlkadım50" hepsi aynı koda çıkıyor.
+        //
+        // ⚠️ Normalleştirme HEM KAYITTA HEM ARAMADA yapıldığı için
+        // veritabanında her zaman ASCII-büyük hâli duruyor; arama
+        // sütuna fonksiyon uygulamıyor, yani index çalışmaya devam
+        // ediyor.
+        //
+        // (Aynı tuzak kategoriIkon.js'te de yaşandı — orada da
+        //  Türkçe karakterli anahtarlar ASCII adlarla eşleşmiyordu.)
+        private const string TurkceHarfler = "ıİĞğÜüŞşÖöÇçI";
+        private const string AsciiHarfler  = "iiGgUuSsOoCcI";
+
+        public static string KoduNormallestir(string? kod)
+        {
+            if (string.IsNullOrWhiteSpace(kod))
+            {
+                return string.Empty;
+            }
+
+            var sonuc = new System.Text.StringBuilder(kod.Length);
+
+            foreach (var harf in kod.Trim())
+            {
+                var yer = TurkceHarfler.IndexOf(harf);
+                sonuc.Append(yer == -1 ? harf : AsciiHarfler[yer]);
+            }
+
+            return sonuc.ToString().ToUpperInvariant();
+        }
+
         // ⚠️ İndirim tutarı DIŞARIDAN ALINMAZ, burada hesaplanır.
         // Mobil "500 TL indirim var" dese bile ona inanmıyoruz.
         public async Task<KuponSonucu> DogrulaAsync(
@@ -65,9 +115,7 @@ namespace ETicaretAPI.Services
                 return Gecersiz("Kupon kodu boş olamaz.");
             }
 
-            // Kodu normalize et: baş/son boşluk sil, BÜYÜK harfe çevir.
-            // Kullanıcı "indirim10 " yazsa da "INDIRIM10" ile eşleşsin.
-            var temizKod = kod.Trim().ToUpperInvariant();
+            var temizKod = KoduNormallestir(kod);
 
             // ---------- 2) KUPON VAR MI ----------
             var kupon = await _context.Coupons

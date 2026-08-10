@@ -479,7 +479,8 @@ namespace ETicaretAPI.Controllers
             decimal? maxFiyat,
             string? kategoriler,
             double? minPuan,
-            bool sadeceStokta)
+            bool sadeceStokta,
+            string? idler = null)
         {
             var query = _context.Products.AsQueryable();
 
@@ -524,6 +525,38 @@ namespace ETicaretAPI.Controllers
             if (!adminMi || !arsiv)
             {
                 query = query.Where(p => !p.ArsivlendiMi);
+            }
+
+            // ⭐ YENİ (GV/Faz 4) — BELİRLİ ID'LERİ GETİR
+            //
+            // Mobildeki "Son gezdiğin ürünler" şeridi için. Geçmiş
+            // CİHAZDA saklanıyor (sunucuda değil — gerekçesi
+            // sonGezilenler.js'te), yani elimizde yalnızca bir id
+            // listesi oluyor ve onların güncel hallerini çekmek
+            // gerekiyor.
+            //
+            // ⚠️ NEDEN AYRI BİR UÇ DEĞİL?
+            // Çünkü bu ucun yaptığı her şey (görünürlük kilidi,
+            // maliyet gizleme, stok türetme, resim ve puan
+            // doldurma) orada da aynen gerekli. Ayrı yazsaydık
+            // ikinci bir kopya doğar ve biri güncellenip diğeri
+            // unutulurdu — üstelik en tehlikeli yerde: müşteriye
+            // giden JSON'da.
+            //
+            // ⚠️ NEDEN ÜRÜN BAŞINA İSTEK DEĞİL?
+            // 12 ürün = 12 istek. Yol haritası 7.4'teki "tek
+            // endpoint kuralı" tam olarak bunu yasaklıyor.
+            //
+            // ⚠️ SIRA KORUNMUYOR — bilerek, ve istemci bunu biliyor.
+            // SQL'e "şu sırayla getir" demek (CASE WHEN zinciri)
+            // hem çirkin hem gereksiz: sırayı zaten İSTEYEN taraf
+            // biliyor, gelen listeyi kendi sırasına dizmesi bir
+            // satır. Sunucu sırayı bilmiyor, bilmesi de gerekmiyor.
+            var idListesi = IdListesiAyristir(idler);
+
+            if (idListesi.Count > 0)
+            {
+                query = query.Where(p => idListesi.Contains(p.Id));
             }
 
             // ⭐ DEĞİŞTİ (6.1) — TEK KATEGORİ mi, ÇOKLU KATEGORİ mi?
@@ -640,7 +673,8 @@ namespace ETicaretAPI.Controllers
             [FromQuery] string? kategoriler = null,   // ⭐ YENİ (6.1)
             [FromQuery] double? minPuan = null,       // ⭐ YENİ (6.1)
             [FromQuery] bool sadeceStokta = false,    // ⭐ YENİ (6.1)
-            [FromQuery] string? siralama = null)      // ⭐ YENİ (6.1)
+            [FromQuery] string? siralama = null,      // ⭐ YENİ (6.1)
+            [FromQuery] string? idler = null)         // ⭐ YENİ (GV/Faz 4)
         {
             // Rolü bir kez okuyup değişkene alıyoruz. Aşağıda iki ayrı yerde
             // lazım olacak; her seferinde token'daki claim listesini taramanın
@@ -649,7 +683,7 @@ namespace ETicaretAPI.Controllers
 
             var query = UrunSorgusuKur(
                 adminMi, categoryId, search, aktif, arsiv,
-                minFiyat, maxFiyat, kategoriler, minPuan, sadeceStokta);
+                minFiyat, maxFiyat, kategoriler, minPuan, sadeceStokta, idler);
 
             query = SiralamayiUygula(query, siralama);
 
@@ -817,7 +851,8 @@ namespace ETicaretAPI.Controllers
             [FromQuery] decimal? maxFiyat = null,
             [FromQuery] string? kategoriler = null,
             [FromQuery] double? minPuan = null,
-            [FromQuery] bool sadeceStokta = false)
+            [FromQuery] bool sadeceStokta = false,
+            [FromQuery] string? idler = null)         // ⭐ YENİ (GV/Faz 4)
         {
             // ⚠️ Rol burada da okunuyor: sayaç, listenin göreceğinden
             // BAŞKA bir sayı vermemeli. Misafire "47 ürün" deyip 31
@@ -826,7 +861,7 @@ namespace ETicaretAPI.Controllers
 
             var query = UrunSorgusuKur(
                 adminMi, categoryId, search, aktif, arsiv,
-                minFiyat, maxFiyat, kategoriler, minPuan, sadeceStokta);
+                minFiyat, maxFiyat, kategoriler, minPuan, sadeceStokta, idler);
 
             var toplam = await query.CountAsync();
 

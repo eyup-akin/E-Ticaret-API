@@ -11,6 +11,28 @@
         // Sipariş anındaki fiyat — sonradan ürün fiyatı değişse bile bu sabit kalır
         public decimal UnitPrice { get; set; }
 
+        // ⭐ YENİ (B1) — SİPARİŞ ANINDAKİ İNDİRİM ÖNCESİ FİYAT
+        //
+        // Sipariş detayında "bu siparişte X TL kazandın" satırı için.
+        //
+        // ⚠️ NEDEN DONDURULUYOR?
+        // Product.EskiFiyat canlı veri: kampanya bitince admin onu
+        // siliyor. Dondurmasaydık, üç ay önce indirimli alınan bir
+        // siparişin detayında kazanç satırı bir gün sessizce
+        // kaybolurdu. "O gün ne kadar kazandım" geçmişe dair bir
+        // soru ve cevabı siparişin içinde durmalı.
+        //
+        // ⚠️ nullable ve ESKİ SATIRLAR DOLDURULMUYOR.
+        // Bu alan bugün eklendi; ondan önceki siparişlerde ürünün
+        // indirimli olup olmadığını GERÇEKTEN bilmiyoruz. UnitPrice
+        // yazsaydık "indirim yoktu" diye YANLIŞ bir iddia üretirdik,
+        // 0 yazsaydık "%100 indirimliydi" derdik. Null bırakılınca
+        // eski siparişlerde kazanç satırı hiç çizilmiyor.
+        //
+        // VatRate ve UnitCost'ta verilen kararın aynısı —
+        // "yanlış sayı, eksik sayıdan tehlikelidir."
+        public decimal? EskiFiyat { get; set; }
+
         // ⭐ YENİ — DONDURULMUŞ ÜRÜN ADI
         //
         // Neden ProductId yetmiyor?

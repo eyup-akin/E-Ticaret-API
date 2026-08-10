@@ -112,6 +112,22 @@ namespace ETicaretAPI.Data
                 .Property(p => p.Cost)
                 .HasPrecision(18, 2);
 
+            // ⭐ YENİ (B1) — indirim öncesi fiyat da bir para alanı.
+            //
+            // ⚠️ Bunlar olmadan EF uyarı veriyordu: "No store type was
+            // specified for the decimal property 'EskiFiyat'". Varsayılan
+            // yine decimal(18,2) üretiyor ama AÇIKÇA yazmak şart —
+            // diğer bütün para alanları burada yapılandırılmış durumda
+            // ve bu ikisi listeye girmezse, yarın varsayılan değişirse
+            // sessizce sapacaklar.
+            modelBuilder.Entity<Product>()
+                .Property(p => p.EskiFiyat)
+                .HasPrecision(18, 2);
+
+            modelBuilder.Entity<OrderItem>()
+                .Property(oi => oi.EskiFiyat)
+                .HasPrecision(18, 2);
+
 
             // ⭐ YENİ — sipariş numarası benzersiz olmalı.
             // Bu index performans için DEĞİL, DOĞRULUK için:

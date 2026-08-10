@@ -46,6 +46,29 @@
         // Sadece belirli bir kategoride geçerli olsun mu? null = tüm ürünler.
         public int? CategoryId { get; set; }
 
+        // ⭐ YENİ (B1) — İNDİRİMLİ ÜRÜNLERDE GEÇERLİ Mİ?
+        //
+        // false ise kupon, EskiFiyat'ı dolu olan (yani zaten indirimli)
+        // kalemleri indirim matrahından düşürüyor. "İndirim üstüne
+        // indirim olmasın" diyen kampanyalar için.
+        //
+        // ⚠️ Bu, CategoryId ile AYNI ŞEKİLDE çalışıyor: ikisi de
+        // "matraha hangi kalemler girer" sorusunu daraltıyor ve
+        // birlikte kullanılabiliyorlar. Yeni bir hesap yolu açmıyor,
+        // var olanı süzüyor — o yüzden KuponServisi'nde ek bir dal
+        // değil, mevcut filtrenin devamı.
+        //
+        // ⚠️ MİNİMUM SEPET TUTARI BUNDAN ETKİLENMİYOR.
+        // "200 TL üzeri alışverişte geçerli" derken kastedilen toplam
+        // alışveriş; kuponun hangi kalemlere işlediği ayrı bir soru.
+        // Kategori filtresinde de aynı karar verilmişti.
+        //
+        // ⚠️ = true varsayılanı ve ESKİ KUPONLAR true İLE DOLUYOR.
+        // Bu UYDURMA DEĞİL: bugüne kadar indirimli ürün diye bir
+        // kavram yoktu, yani mevcut kuponlar fiilen her ürüne
+        // işliyordu. true, o davranışı aynen koruyor.
+        public bool IndirimliUrunlerdeGecerli { get; set; } = true;
+
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public int CreatedByUserId { get; set; }
     }

@@ -92,6 +92,42 @@
         public int VatRate { get; set; } = 20;
 
 
+        // ⭐ YENİ (B1) — İNDİRİM ÖNCESİ FİYAT
+        //
+        // ⚠️⚠️ BU ALAN HİÇBİR HESABA GİRMEZ. SADECE GÖSTERİMDİR.
+        //
+        // Price hâlâ "müşterinin ödediği tutar" ve tek doğru kaynak.
+        // Sepet toplamı, KDV ayrıştırması, kâr hesabı ve sipariş
+        // dondurması Price'ı okumaya devam ediyor; bu alan onların
+        // hiçbirine dokunmuyor.
+        //
+        // Alternatif tasarım "IndirimOrani" tutup fiyatı hesaplamaktı
+        // ve REDDEDİLDİ: o durumda Price'ın ne olduğu belirsizleşirdi
+        // (liste fiyatı mı, satış fiyatı mı?) ve fiyatı okuyan HER
+        // yer indirimi uygulayıp uygulamayacağını bilmek zorunda
+        // kalırdı — Aşama 4.2'de tek doğru kaynağa toplanan para
+        // hesabı yeniden dağılırdı.
+        //
+        // GÖSTERİM KURALI (istemcide):
+        //   EskiFiyat != null && EskiFiyat > Price
+        //     → üstü çizili EskiFiyat + yeşil Price + yüzde rozeti
+        //   aksi halde tek fiyat
+        //
+        // ⚠️ Yüzde SAKLANMIYOR, hesaplanıyor. Saklasaydık fiyat
+        // değişince bayatlar ve iki sayı çelişirdi.
+        //
+        // ⚠️ nullable: "indirim yok" ile "indirim sıfır" farklı
+        // şeyler. 0 yazsaydık her ürün "%100 indirimli" görünürdü.
+        //
+        // ⚠️⚠️ YASAL UYARI — BU ALAN DENETLENMİYOR.
+        // Fiyat Etiketi Yönetmeliği, indirim öncesi fiyatın son 30
+        // günde FİİLEN uygulanmış en düşük fiyat olmasını istiyor.
+        // Burada böyle bir kontrol YOK; admin ne yazarsa o görünüyor.
+        // Gerçek denetim fiyat geçmişi tutmayı gerektiriyor ve o
+        // Aşama 10'un (yasal katman) işi. Admin formunda uyarı var.
+        public decimal? EskiFiyat { get; set; }
+
+
         // ⭐ YENİ (4.8) — ARŞİVLENDİ Mİ?
         //
         // ⚠️ BU, IsActive'İN İKİZİ DEĞİL — ÜÇÜNCÜ BİR SEVİYE.

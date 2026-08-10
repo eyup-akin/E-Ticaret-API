@@ -73,6 +73,14 @@ namespace ETicaretAPI.DTOs
         // yani panel tamamen çalışmaz hale gelirdi.
         [KdvOraniGecerli]
         public int VatRate { get; set; } = 20;
+
+        // ⭐ YENİ (B1) — indirim öncesi fiyat (isteğe bağlı).
+        //
+        // ⚠️ DOĞRULAMA BURADA DEĞİL, CONTROLLER'DA.
+        // Kural iki alan ARASINDA bir ilişki (EskiFiyat > Price) ve
+        // veri anotasyonları tek alana bakar. Attribute yazmaya
+        // çalışmak kuralı yarım uygulardı.
+        public decimal? EskiFiyat { get; set; }
     }
 
 

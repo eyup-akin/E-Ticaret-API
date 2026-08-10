@@ -135,7 +135,17 @@ namespace ETicaretAPI.Controllers
                           ProductId = p.Id,
                           CategoryId = p.CategoryId,
                           Adet = ci.Quantity,
-                          BirimFiyat = p.Price
+                          BirimFiyat = p.Price,
+
+                          // ⭐ YENİ (B1) — kupon "indirimli üründe
+                          // geçmez" ise bu kalem matrahtan düşecek.
+                          //
+                          // ⚠️ Koşul OrdersController'daki ile BİREBİR
+                          // aynı olmak zorunda: sepette önizlenen
+                          // indirim ile siparişte uygulanan indirim
+                          // farklı çıkarsa müşteri gördüğü tutarı
+                          // ödemez.
+                          IndirimliMi = p.EskiFiyat != null && p.EskiFiyat > p.Price
                       })
                 .ToListAsync();
         }

@@ -550,6 +550,20 @@ namespace ETicaretAPI.Controllers
                         // Satış fiyatı — müşterinin ödediği tutar
                         UnitPrice = urun.Price,
 
+                        // ⭐ YENİ (B1) — o anki indirim öncesi fiyat.
+                        //
+                        // ⚠️ Product.EskiFiyat CANLI VERİ: kampanya
+                        // bitince admin onu siliyor. Dondurmasaydık üç
+                        // ay önce indirimli alınan bir siparişin
+                        // "kazandın" satırı bir gün sessizce
+                        // kaybolurdu.
+                        //
+                        // ⚠️ Ürün indirimsizse null kalıyor ve o doğru:
+                        // urun.Price yazsaydık her siparişte "indirim
+                        // yoktu" diye ayrıca bir iddia üretirdik ve
+                        // ekranda 0 TL'lik bir kazanç satırı çıkardı.
+                        EskiFiyat = urun.EskiFiyat,
+
                         // ⭐ YENİ — ürün adı.
                         // Ürün sonradan silinse veya adı değişse bile
                         // müşteri neyi sipariş ettiğini görebilsin.
@@ -620,7 +634,17 @@ namespace ETicaretAPI.Controllers
                                 ProductId = u.Id,
                                 CategoryId = u.CategoryId,
                                 Adet = oge.Quantity,
-                                BirimFiyat = u.Price
+                                BirimFiyat = u.Price,
+
+                                // ⭐ YENİ (B1) — kupon "indirimli üründe
+                                // geçmez" ise bu kalem matrahtan düşer.
+                                //
+                                // ⚠️ Koşul CouponsController'daki ile
+                                // BİREBİR aynı olmak zorunda: sepette
+                                // önizlenen indirim ile siparişte
+                                // uygulanan indirim farklı çıkarsa
+                                // müşteri gördüğü tutarı ödemez.
+                                IndirimliMi = u.EskiFiyat != null && u.EskiFiyat > u.Price
                             });
                         }
                     }
@@ -1174,7 +1198,8 @@ namespace ETicaretAPI.Controllers
                     ProductName = oi.ProductName,
                     Quantity = oi.Quantity,
                     UnitPrice = oi.UnitPrice,
-                    VatRate = oi.VatRate          // ⭐ YENİ
+                    VatRate = oi.VatRate,         // ⭐ YENİ
+                    EskiFiyat = oi.EskiFiyat      // ⭐ YENİ (B1)
                 })
                 .ToList();
 

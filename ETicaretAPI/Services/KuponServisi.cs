@@ -22,6 +22,15 @@ namespace ETicaretAPI.Services
         public int CategoryId { get; set; }
         public int Adet { get; set; }
         public decimal BirimFiyat { get; set; }
+
+        // ⭐ YENİ (B1) — bu kalem indirimli bir ürün mü?
+        //
+        // ⚠️ Fiyatın kendisi DEĞİL, sadece "indirimli mi" bilgisi
+        // taşınıyor. Kupon hesabının eski fiyata ihtiyacı yok; tek
+        // sorduğu şey "bu kalem matraha girsin mi".
+        //
+        // BirimFiyat zaten indirimli (satış) fiyat — Product.Price.
+        public bool IndirimliMi { get; set; }
     }
 
     // KUPON MANTIĞI TEK YERDE
@@ -128,24 +137,50 @@ namespace ETicaretAPI.Services
             }
 
             // ---------- 7) İNDİRİMİN UYGULANACAĞI TUTAR ----------
-            // Kupon bir kategoriye bağlıysa SADECE o kategorideki ürünlerin
-            // toplamı üzerinden indirim yapılır. Bağlı değilse tüm sepet.
-            decimal indirimeEsasTutar;
+            //
+            // İki süzgeç var ve BİRLİKTE çalışıyorlar:
+            //   • Kategori — kupon bir kategoriye bağlıysa yalnızca o
+            //     kategorideki kalemler matraha girer
+            //   • İndirim  — kupon "indirimli üründe geçmez" ise zaten
+            //     indirimli olan kalemler matrahtan düşer
+            //
+            // ⚠️ İKİSİ DE AYNI SORUYU DARALTIYOR: "matraha hangi
+            // kalemler girer". Yeni bir hesap yolu açmıyorlar, var
+            // olanı süzüyorlar — bu yüzden ayrı bir dal değil, aynı
+            // zincirin devamı. Ayrı dal yazsaydık dört kombinasyon
+            // (kategorili/kategorisiz × indirimli/indirimsiz) için
+            // dört ayrı hesap doğardı ve biri güncellenip diğeri
+            // unutulurdu.
+            var uygunKalemler = sepet.AsEnumerable();
 
             if (kupon.CategoryId.HasValue)
             {
-                indirimeEsasTutar = sepet
-                    .Where(k => k.CategoryId == kupon.CategoryId.Value)
-                    .Sum(k => k.BirimFiyat * k.Adet);
-
-                if (indirimeEsasTutar <= 0)
-                {
-                    return Gecersiz("Bu kupon sepetindeki ürünlerde geçerli değil.");
-                }
+                uygunKalemler = uygunKalemler.Where(k => k.CategoryId == kupon.CategoryId.Value);
             }
-            else
+
+            // ⭐ YENİ (B1)
+            if (!kupon.IndirimliUrunlerdeGecerli)
             {
-                indirimeEsasTutar = sepet.Sum(k => k.BirimFiyat * k.Adet);
+                uygunKalemler = uygunKalemler.Where(k => !k.IndirimliMi);
+            }
+
+            decimal indirimeEsasTutar = uygunKalemler.Sum(k => k.BirimFiyat * k.Adet);
+
+            // ⚠️ Uygun kalem kalmadıysa kupon REDDEDİLİYOR, sessizce
+            // 0 indirim uygulanmıyor. "Kupon uygulandı" deyip 0 TL
+            // düşmek, müşteriye çalıştığını söyleyip hiçbir şey
+            // yapmamak olurdu — en kötü hata türü.
+            //
+            // ⚠️ Mesaj SEBEBİ söylüyor. "Bu kupon geçerli değil"
+            // deseydik müşteri kodun yanlış olduğunu sanardı.
+            if (indirimeEsasTutar <= 0)
+            {
+                return Gecersiz(
+                    !kupon.IndirimliUrunlerdeGecerli && kupon.CategoryId.HasValue
+                        ? "Bu kupon sepetindeki ürünlerde geçerli değil."
+                        : !kupon.IndirimliUrunlerdeGecerli
+                            ? "Bu kupon indirimli ürünlerde geçerli değil."
+                            : "Bu kupon sepetindeki ürünlerde geçerli değil.");
             }
 
             // ---------- 8) MİNİMUM SEPET TUTARI ----------

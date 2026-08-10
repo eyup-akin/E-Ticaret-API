@@ -699,6 +699,7 @@ namespace ETicaretAPI.Controllers
                     Cost = p.Cost,
                     IsActive = p.IsActive,      // ⭐ YENİ
                     VatRate = p.VatRate,        // ⭐ YENİ
+                    EskiFiyat = p.EskiFiyat,    // ⭐ YENİ (B1)
                     ArsivlendiMi = p.ArsivlendiMi   // ⭐ YENİ (4.8)
                 })
                 .ToListAsync();
@@ -971,6 +972,7 @@ namespace ETicaretAPI.Controllers
                 // ⭐ YENİ — KDV oranı. Liste ucunda da dolu geliyor
                 // (Description'ın aksine) — tek int, veri yükü yok.
                 VatRate = product.VatRate,
+                EskiFiyat = product.EskiFiyat,   // ⭐ YENİ (B1)
 
                 ArsivlendiMi = product.ArsivlendiMi   // ⭐ YENİ (4.8)
             };
@@ -1306,6 +1308,37 @@ namespace ETicaretAPI.Controllers
         // 🔴 POST /api/products
         [Authorize(Roles = "admin")]
         [HttpPost]
+
+        // ⭐ YENİ (B1) — İNDİRİM ÖNCESİ FİYAT DOĞRULAMASI
+        //
+        // Tek kural: eski fiyat, satış fiyatından BÜYÜK olmalı.
+        // Eşit ya da küçükse ortada indirim yok demektir.
+        //
+        // ⚠️ HATA DÖNDÜRMÜYORUZ, SESSİZCE NULL'A ÇEKİYORUZ.
+        // Admin "eski fiyat 100, yeni fiyat 150" yazdıysa niyeti
+        // indirim değil; bunu bir hata sayıp formu reddetmek, işi
+        // olmayan bir engel çıkarmak olurdu. Alan boşaltılıyor ve
+        // ürün indirimsiz kaydediliyor — ekranda da öyle görünüyor,
+        // yani admin sonucu hemen görüyor.
+        //
+        // ⚠️ Bu kural İKİ YERDE (ekle ve güncelle) gerekiyor; o
+        // yüzden ortak bir yardımcıya alındı.
+        //
+        // ⚠️⚠️ YASAL DENETİM BURADA YOK.
+        // Fiyat Etiketi Yönetmeliği indirim öncesi fiyatın son 30
+        // günde fiilen uygulanmış en düşük fiyat olmasını istiyor.
+        // Bunu doğrulamak fiyat geçmişi tutmayı gerektiriyor ve o
+        // Aşama 10'un işi. Bugün admin ne yazarsa o görünüyor.
+        private static decimal? EskiFiyatiDogrula(decimal? eskiFiyat, decimal fiyat)
+        {
+            if (!eskiFiyat.HasValue || eskiFiyat.Value <= fiyat)
+            {
+                return null;
+            }
+
+            return eskiFiyat;
+        }
+
         public async Task<IActionResult> CreateProduct([FromBody] ProductCreateDto dto)
         {
             var barkod = dto.Barcode.Trim();
@@ -1453,6 +1486,9 @@ namespace ETicaretAPI.Controllers
             // güncelleme yalnızca bundan SONRAKİ siparişler için
             // geçerli. Dondurma deseninin tam olarak var oluş sebebi.
             product.VatRate = dto.VatRate;
+
+            // ⭐ YENİ (B1)
+            product.EskiFiyat = EskiFiyatiDogrula(dto.EskiFiyat, dto.Price);
 
             // ⭐ YENİ — DEFTERE FARK KAYDI
             //

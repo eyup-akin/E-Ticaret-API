@@ -112,5 +112,10 @@ namespace ETicaretAPI.DTOs
         // Nullable: bu alan eklenmeden önceki kalemlerde boş.
         // Ekran null ise oran bilgisini hiç göstermez.
         public int? VatRate { get; set; }
+
+        // ⭐ YENİ (B1) — sipariş anında dondurulmuş indirim öncesi
+        // fiyat. Eski siparişlerde null ve orada kazanç satırı hiç
+        // çizilmiyor.
+        public decimal? EskiFiyat { get; set; }
     }
 }

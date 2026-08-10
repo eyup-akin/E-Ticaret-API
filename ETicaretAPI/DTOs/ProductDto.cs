@@ -114,6 +114,19 @@
         // değil, "maliyeti faydasından büyük olanı kes".
         public int VatRate { get; set; }
 
+        // ⭐ YENİ (B1) — indirim öncesi fiyat. null = indirim yok.
+        //
+        // ⚠️ İNDİRİM YÜZDESİ GÖNDERİLMİYOR — istemci hesaplıyor.
+        // Sunucudan yollasaydık aynı gerçek iki alanda yaşardı ve
+        // fiyat değişip yüzde bayatladığında ekranda çelişki
+        // çıkardı. Tek satırlık bir bölme işlemi için ağa fazladan
+        // alan koymanın da anlamı yok.
+        //
+        // ⚠️ Cost'un aksine bu alan MÜŞTERİYE GİDİYOR: eski fiyat
+        // ticari sır değil, tam tersine müşteriye söylenmek istenen
+        // şeyin ta kendisi.
+        public decimal? EskiFiyat { get; set; }
+
 
         // ⭐ YENİ (5.5) — bu müşterinin bekleyen stok bildirimi var mı?
         //

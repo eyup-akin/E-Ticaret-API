@@ -1377,7 +1377,22 @@ namespace ETicaretAPI.Controllers
                 // yapılıyor; buraya sadece geçerli oranlar ulaşabiliyor.
                 // Burada ikinci bir kontrol yazmak, kuralın iki yerde
                 // yaşaması demek olurdu.
-                VatRate = dto.VatRate
+                VatRate = dto.VatRate,
+
+                // ⭐ YENİ (B1) — indirim öncesi fiyat.
+                //
+                // ⚠️ BU SATIR EKSİKTİ VE SESSİZ BİR HATAYDI.
+                // DTO alanı taşıyordu, UpdateProduct yazıyordu, ama
+                // CreateProduct atlıyordu: panelden indirimli olarak
+                // OLUŞTURULAN ürünün eski fiyatı hiçbir hata vermeden
+                // kayboluyordu. Admin kaydediyor, "başarılı" mesajını
+                // görüyor, indirim yok. Sonradan bir kez daha kaydetmek
+                // (güncelleme yolu) düzeltiyordu — yani hata "bazen
+                // çalışıyor" gibi görünürdü.
+                //
+                // Doğrulama UpdateProduct ile AYNI yardımcıdan geçiyor;
+                // iki yolun kuralı ayrışamaz.
+                EskiFiyat = EskiFiyatiDogrula(dto.EskiFiyat, dto.Price)
 
             };
 

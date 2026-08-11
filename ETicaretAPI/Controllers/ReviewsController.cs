@@ -26,6 +26,20 @@ namespace ETicaretAPI.Controllers
         }
 
         // 🟢 GET /api/products/5/reviews — herkese açık, ürünün yorumları
+        //
+        // ⭐ DEĞİŞTİ (B5) — CEVAP ARTIK DÜZ LİSTE DEĞİL, İKİ ALANLI NESNE:
+        //     { yorumlar: [...], dagilim: [...] }
+        //
+        // Neden ayrı bir "/dagilim" ucu açılmadı? Ürün detay ekranı
+        // yorumları ve dağılımı AYNI ANDA, aynı bölümde çiziyor. İki uç
+        // iki istek demekti ve yol haritası 7.4'teki "bölüm başına ayrı
+        // istek atma" kuralına takılıyordu. Dahası iki uç, gizli yorum
+        // filtresini iki yerde tekrarlamak olurdu; biri güncellenip
+        // diğeri unutulunca çubuklar listede olmayan yorumları sayardı.
+        //
+        // ⚠️ BU KIRICI BİR DEĞİŞİKLİK. Tek tüketici mobildeki
+        // YorumBolumu ve o da bu commit'te güncellendi. Sürüm numarası
+        // koymadık: uç henüz dışarıya açık değil.
         [HttpGet]
         public async Task<IActionResult> GetReviews(int productId)
         {
@@ -55,7 +69,49 @@ namespace ETicaretAPI.Controllers
                       })
                 .ToListAsync();
 
-            return Ok(reviews);
+            // ⭐ YENİ (B5) — PUAN DAĞILIMI (5/4/3/2/1)
+            //
+            // ⚠️ FİLTRE LİSTEDEKİYLE BİREBİR AYNI: !IsHidden.
+            // Gizlenmiş yorum listede görünmüyorsa çubukta da sayılmaz.
+            // "Bir kaydı görünürlükten çıkarıyorsan, o kayıttan TÜRETİLEN
+            // her şeyi de çıkarmalısın" — aynı kural PuanlariDoldur'da ve
+            // puan filtresinde de uygulanıyor. Ayrılsaydı müşteri
+            // 3 yorum görüp çubuklarda 4 sayardı.
+            //
+            // ⚠️ Sayım VERİTABANINDA yapılıyor, yukarıdaki listeden
+            // türetilmiyor. Bugün ikisi aynı kümeyi görüyor ama listeye
+            // sayfalama eklendiği gün "10 yorum geldi, dağılım 10 diyor"
+            // olurdu; oysa dağılım TÜM yorumların dağılımıdır.
+            var sayimlar = await _context.Reviews
+                .Where(r => r.ProductId == productId && !r.IsHidden)
+                .GroupBy(r => r.Rating)
+                .Select(g => new { Puan = g.Key, Adet = g.Count() })
+                .ToListAsync();
+
+            // ⚠️ BEŞ BASAMAK DA HER ZAMAN DÖNÜYOR, hiç yorum almamış
+            // puanlar 0 ile. Eksik anahtar göndersek çubukları çizen
+            // taraf boşluğu kendisi doldurmak zorunda kalırdı — yani
+            // aynı kural iki yerde yaşardı. Sıfır burada uydurulmuş bir
+            // sayı değil, ölçülmüş bir gerçek: o puanı kimse vermemiş.
+            //
+            // ⚠️ Sözlük değil DİZİ: JSON nesnesinde anahtar sırası
+            // garanti değildir, oysa çubukların 5'ten 1'e inmesi
+            // tasarımın kendisi. Sırayı sunucu söylüyor, istemci
+            // yeniden sıralamıyor.
+            var dagilim = Enumerable.Range(1, 5)
+                .Reverse()
+                .Select(puan => new
+                {
+                    puan,
+                    adet = sayimlar.FirstOrDefault(s => s.Puan == puan)?.Adet ?? 0
+                })
+                .ToList();
+
+            // ⚠️ Ortalama ve toplam sayı BURADA DÖNMÜYOR — ikisi de
+            // ProductDto'da (averageRating / reviewCount) zaten var ve
+            // ekran onları oradan okuyor. İkinci bir kopya göndermek,
+            // iki uçtan gelen iki sayının bir gün ayrışması demekti.
+            return Ok(new { yorumlar = reviews, dagilim });
         }
 
         // 🟡 GET /api/products/5/reviews/durum — giriş yapan kullanıcı yorum yapabilir mi?

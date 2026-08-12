@@ -61,6 +61,24 @@
                 Aciklama = "Kategori adı. Sistemde yoksa otomatik oluşturulur.",
                 OrnekDeger = "Giyim"
             },
+            // ⭐ YENİ (B1 tamamlama, 2026-08-12)
+            //
+            // ⚠️ Fiyatın HEMEN ARDINDAN geliyor: Excel'i dolduran kişi
+            // iki fiyatı yan yana görüp karşılaştırabilsin. Sona
+            // koysaydık "hangi fiyat neydi" diye başa dönmek gerekirdi.
+            new UrunKolonu
+            {
+                BaslikAdi = "Eski Fiyat",
+                KabulEdilenAdlar = new[]
+                {
+                    "eski fiyat", "eskifiyat", "indirim oncesi fiyat",
+                    "indirim öncesi fiyat", "old price", "oldprice", "list price"
+                },
+                Zorunlu = false,
+                Aciklama = "İndirim ÖNCESİ fiyat (isteğe bağlı). Satış fiyatından " +
+                           "büyük olmalı; değilse yok sayılır ve ürün indirimsiz kaydedilir.",
+                OrnekDeger = "249,90"
+            },
             new UrunKolonu
             {
                 BaslikAdi = "Maliyet",

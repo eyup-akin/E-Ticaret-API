@@ -102,6 +102,7 @@ namespace ETicaretAPI.Services
                 var adSutun = KolonBul("Ürün Adı");
                 var fiyatSutun = KolonBul("Fiyat");
                 var kategoriSutun = KolonBul("Kategori");
+                var eskiFiyatSutun = KolonBul("Eski Fiyat");   // ⭐ YENİ (B1)
                 var maliyetSutun = KolonBul("Maliyet");
                 var stokSutun = KolonBul("Stok");
 
@@ -197,6 +198,25 @@ namespace ETicaretAPI.Services
                     }
 
                     // --- Maliyet ve stok isteğe bağlı ---
+                    // ⭐ YENİ (B1) — indirim öncesi fiyat.
+                    //
+                    // ⚠️ Doğrulama BİZDE DEĞİL, `IndirimKurali`'nde:
+                    // panel formu da aynı metodu çağırıyor. Burada ayrı
+                    // bir kontrol yazsaydık iki kapı iki farklı kural
+                    // uygulardı.
+                    //
+                    // ⚠️ Okunamayan/boş hücre null bırakıyor — satırı
+                    // reddetmiyor. Sütun isteğe bağlı; bir yazım hatası
+                    // yüzünden 500 satırlık yüklemeyi çöpe atmak
+                    // orantısız olurdu (KDV sütununda verilen kararın
+                    // aynısı).
+                    decimal? eskiFiyat = null;
+                    if (eskiFiyatSutun != null &&
+                        DecimalOku(satir.Cell(eskiFiyatSutun.Value), out var ef))
+                    {
+                        eskiFiyat = ef;
+                    }
+
                     decimal? maliyet = null;
                     if (maliyetSutun != null &&
                         DecimalOku(satir.Cell(maliyetSutun.Value), out var m))
@@ -294,7 +314,10 @@ namespace ETicaretAPI.Services
                         CategoryId = kategoriId,
                         
                         Description = aciklama,  // ⭐ YENİ
-                        VatRate = kdvOrani       // ⭐ YENİ
+                        VatRate = kdvOrani,      // ⭐ YENİ
+
+                        // ⭐ YENİ (B1) — panel formuyla AYNI kural
+                        EskiFiyat = IndirimKurali.EskiFiyatiDogrula(eskiFiyat, fiyat)
                     };
 
                     _context.Products.Add(urun);

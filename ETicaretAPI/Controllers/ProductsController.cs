@@ -687,6 +687,16 @@ namespace ETicaretAPI.Controllers
 
             query = SiralamayiUygula(query, siralama);
 
+            // ⭐ YENİ (B4) — kategori adı.
+            //
+            // ⚠️ Product'ta gezinme özelliği (navigation property) YOK,
+            // o yüzden Include yerine ELLE BİRLEŞTİRME yapıyoruz:
+            // alt sorgu ile adı seçiyoruz. EF bunu tek SQL'e çeviriyor
+            // (LEFT JOIN), yani N+1 sorgu doğmuyor.
+            //
+            // ⚠️ Kategori silinmişse alt sorgu null döner ve alan null
+            // kalır — ekran etiketi hiç çizmiyor. Boş string yazsaydık
+            // "adı olmayan bir kategorisi var" gibi okunurdu.
             var products = await query
                 .Select(p => new ProductDto
                 {
@@ -695,6 +705,10 @@ namespace ETicaretAPI.Controllers
                     Price = p.Price,
                     Stock = p.Stock,
                     CategoryId = p.CategoryId,
+                    CategoryName = _context.Categories
+                        .Where(k => k.Id == p.CategoryId)
+                        .Select(k => k.Name)
+                        .FirstOrDefault(),
                     Barcode = p.Barcode,
                     Cost = p.Cost,
                     IsActive = p.IsActive,      // ⭐ YENİ
@@ -950,6 +964,12 @@ namespace ETicaretAPI.Controllers
                 return NotFound(new { mesaj = "Ürün bulunamadı biladerim!" });
             }
 
+            // ⭐ YENİ (B4) — kategori adı. Tek kayıt, tek küçük sorgu.
+            var kategoriAdi = await _context.Categories
+                .Where(k => k.Id == product.CategoryId)
+                .Select(k => k.Name)
+                .FirstOrDefaultAsync();
+
             var dto = new ProductDto
             {
                 Id = product.Id,
@@ -957,6 +977,7 @@ namespace ETicaretAPI.Controllers
                 Price = product.Price,
                 Stock = product.Stock,
                 CategoryId = product.CategoryId,
+                CategoryName = kategoriAdi,
                 Barcode = product.Barcode,
                 IsActive = product.IsActive,                  // ⭐ YENİ
                 // Maliyet sadece admin isteğinde dolsun, değilse null kalsın
@@ -1309,35 +1330,13 @@ namespace ETicaretAPI.Controllers
         [Authorize(Roles = "admin")]
         [HttpPost]
 
-        // ⭐ YENİ (B1) — İNDİRİM ÖNCESİ FİYAT DOĞRULAMASI
+        // ⭐ DEĞİŞTİ (2026-08-12) — KURAL BU DOSYADAN ÇIKTI.
         //
-        // Tek kural: eski fiyat, satış fiyatından BÜYÜK olmalı.
-        // Eşit ya da küçükse ortada indirim yok demektir.
-        //
-        // ⚠️ HATA DÖNDÜRMÜYORUZ, SESSİZCE NULL'A ÇEKİYORUZ.
-        // Admin "eski fiyat 100, yeni fiyat 150" yazdıysa niyeti
-        // indirim değil; bunu bir hata sayıp formu reddetmek, işi
-        // olmayan bir engel çıkarmak olurdu. Alan boşaltılıyor ve
-        // ürün indirimsiz kaydediliyor — ekranda da öyle görünüyor,
-        // yani admin sonucu hemen görüyor.
-        //
-        // ⚠️ Bu kural İKİ YERDE (ekle ve güncelle) gerekiyor; o
-        // yüzden ortak bir yardımcıya alındı.
-        //
-        // ⚠️⚠️ YASAL DENETİM BURADA YOK.
-        // Fiyat Etiketi Yönetmeliği indirim öncesi fiyatın son 30
-        // günde fiilen uygulanmış en düşük fiyat olmasını istiyor.
-        // Bunu doğrulamak fiyat geçmişi tutmayı gerektiriyor ve o
-        // Aşama 10'un işi. Bugün admin ne yazarsa o görünüyor.
-        private static decimal? EskiFiyatiDogrula(decimal? eskiFiyat, decimal fiyat)
-        {
-            if (!eskiFiyat.HasValue || eskiFiyat.Value <= fiyat)
-            {
-                return null;
-            }
-
-            return eskiFiyat;
-        }
+        // İndirim öncesi fiyat doğrulaması artık
+        // `Services/IndirimKurali.cs`'te. Sebebi: Excel içe aktarma
+        // üçüncü tüketici oldu ve kural iki yerde ayrı yazılsaydı
+        // panelden reddedilen bir eski fiyat Excel'den geçebilirdi.
+        // Gerekçelerin tamamı o dosyada.
 
         public async Task<IActionResult> CreateProduct([FromBody] ProductCreateDto dto)
         {
@@ -1392,7 +1391,7 @@ namespace ETicaretAPI.Controllers
                 //
                 // Doğrulama UpdateProduct ile AYNI yardımcıdan geçiyor;
                 // iki yolun kuralı ayrışamaz.
-                EskiFiyat = EskiFiyatiDogrula(dto.EskiFiyat, dto.Price)
+                EskiFiyat = IndirimKurali.EskiFiyatiDogrula(dto.EskiFiyat, dto.Price)
 
             };
 
@@ -1503,7 +1502,7 @@ namespace ETicaretAPI.Controllers
             product.VatRate = dto.VatRate;
 
             // ⭐ YENİ (B1)
-            product.EskiFiyat = EskiFiyatiDogrula(dto.EskiFiyat, dto.Price);
+            product.EskiFiyat = IndirimKurali.EskiFiyatiDogrula(dto.EskiFiyat, dto.Price);
 
             // ⭐ YENİ — DEFTERE FARK KAYDI
             //

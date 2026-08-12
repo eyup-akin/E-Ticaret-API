@@ -51,6 +51,19 @@
 
         public int CategoryId { get; set; }
 
+        // ⭐ YENİ (B4) — kategorinin ADI.
+        //
+        // ⚠️ Neden id yetmiyordu? Ürün kartı kategoriyi yazıyla
+        // gösteriyor ("MUTFAK"). İstemci elindeki id'yi ada çevirmek
+        // için kategori listesini ayrıca çekip eşlemek zorundaydı;
+        // favoriler ve son gezilenler gibi kategori listesi olmayan
+        // ekranlarda bu mümkün bile değildi.
+        //
+        // ⚠️ Nullable: kategori silinmiş bir üründe ad yok. Boş string
+        // göndermek "kategorisi var ama adı boş" gibi okunurdu; ekran
+        // null görünce etiketi hiç çizmiyor.
+        public string? CategoryName { get; set; }
+
         // ⭐ YENİ — barkod. Herkese açık (gizli bilgi değil).
         public string? Barcode { get; set; }
 

@@ -1237,6 +1237,11 @@ namespace ETicaretAPI.Controllers
                 // ⭐ YENİ — kargo bilgileri
                 ShippingCompany = order.ShippingCompany,
                 TrackingNumber = order.TrackingNumber,
+
+                // ⭐ YENİ (B7) — takip bağlantısı. Firmanın şablonu
+                // tanımlı değilse null gelir ve ekran butonu çizmez.
+                TrackingUrl = KargoTakipUrlOlustur(order.ShippingCompany, order.TrackingNumber),
+
                 ShippedAt = order.ShippedAt,
                 DeliveredAt = order.DeliveredAt,
                 CustomerNote = order.CustomerNote,
@@ -1406,6 +1411,42 @@ namespace ETicaretAPI.Controllers
         {
             return _config.GetSection("Kargo:Firmalar").Get<string[]>()
                    ?? Array.Empty<string>();
+        }
+
+        // ⭐ YENİ (B7) — MÜŞTERİYE GÖSTERİLECEK TAKİP BAĞLANTISI
+        //
+        // Firma adına karşılık gelen şablonu appsettings'ten okur ve
+        // takip numarasını yerleştirir. Karşılığı yoksa null döner.
+        //
+        // Neden bağlantıyı SUNUCU kuruyor, mobil kendisi kurmuyor?
+        //   Şablonlar yapılandırmada; mobilin onları bilmesi demek
+        //   uygulamayı güncellemeden firma ekleyememek demek. Ayrıca
+        //   aynı eşleme ileride e-posta şablonunda da gerekirse tek
+        //   yerden gelir.
+        //
+        // ⚠️ null DÖNMEK BİR HATA DEĞİL, GEÇERLİ BİR CEVAP. Ekran
+        // butonu çizmiyor. Tanımsız firmaya uydurma bir adres üretmek,
+        // müşteriyi "sayfa bulunamadı"ya göndermek olurdu.
+        //
+        // ⚠️ Takip numarası URL'e girmeden ÖNCE kaçırılıyor. Numaralar
+        // bugün alfanümerik ama adresi biz kuruyorsak kaçırmayı da biz
+        // yapmalıyız — veriye güvenip adres birleştirmek klasik bir
+        // enjeksiyon yoludur.
+        private string? KargoTakipUrlOlustur(string? firma, string? takipNo)
+        {
+            if (string.IsNullOrWhiteSpace(firma) || string.IsNullOrWhiteSpace(takipNo))
+            {
+                return null;
+            }
+
+            var sablon = _config[$"Kargo:TakipUrlleri:{firma.Trim()}"];
+
+            if (string.IsNullOrWhiteSpace(sablon))
+            {
+                return null;
+            }
+
+            return sablon.Replace("{takipNo}", Uri.EscapeDataString(takipNo.Trim()));
         }
 
         // 🔴 GET /api/admin/kargo-firmalari — panelin açılır menüsü için

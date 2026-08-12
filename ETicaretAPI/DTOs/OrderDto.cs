@@ -44,6 +44,18 @@ namespace ETicaretAPI.DTOs
 
         public string? ShippingCompany { get; set; }
         public string? TrackingNumber { get; set; }
+
+        // ⭐ YENİ (B7) — hazır takip bağlantısı.
+        //
+        // ⚠️ Yalnızca TEK SİPARİŞ ucunda dolu; liste ucunda hep null.
+        // Takip butonu sadece detay ekranında var ve liste sorgusu
+        // doğrudan SQL'e çevriliyor — orada bellekte string kurmak
+        // sorguyu istemciye çekmek anlamına gelirdi.
+        //
+        // ⚠️ null "kargoya verilmedi" demek DEĞİL: firmanın
+        // appsettings'te takip adresi tanımlı değilse de null gelir.
+        // Ekran tek bir soruyla ilgileniyor — "buton çizilsin mi".
+        public string? TrackingUrl { get; set; }
         public DateTime? ShippedAt { get; set; }
         public DateTime? DeliveredAt { get; set; }
         public string? CustomerNote { get; set; }

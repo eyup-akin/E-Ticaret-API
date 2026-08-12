@@ -888,8 +888,53 @@ namespace ETicaretAPI.Controllers
             }
 
 
-            // ---------- İLERİDE EKLENECEKLER ----------
-            // Aşama 9 → bekleyen iade talepleri
+            // ---------- 5) KARAR BEKLEYEN İADELER ----------
+            //
+            // ⚠️ YALNIZCA "talep_edildi". Onaylanmış bir iade
+            // müşterinin paketi göndermesini bekliyor — adminin
+            // yapacağı bir şey yok. "Teslim alındı"da iş var (para
+            // iadesi) ama o bir KARAR değil, akışın son adımı; paneli
+            // yapılacak iş listesi olarak tutmak için burada yalnızca
+            // karar bekleyenler var.
+            var bekleyenIadeler = await (
+                from r in _context.ReturnRequests
+                where r.Durum == IadeDurumu.TalepEdildi
+                join o in _context.Orders on r.OrderId equals o.Id
+
+                // En ESKİ üstte: en uzun bekleyen müşteri en acil olan.
+                orderby r.TalepTarihi, r.Id
+                select new
+                {
+                    metin = o.OrderNumber,
+                    altMetin = o.ShippingFullName,   // dondurulmuş ad
+                    tarih = (DateTime?)r.TalepTarihi,
+                    tutar = (decimal?)null,
+
+                    // ⚠️ Link talep id'si taşıyor: DikkatKarti satırları
+                    // `key={oge.link}` ile çiziliyor, hepsine aynı adresi
+                    // verseydik React "aynı key" uyarısı verirdi.
+                    link = "/iadeler?id=" + r.Id
+                })
+                .Take(8)
+                .ToListAsync();
+
+            if (bekleyenIadeler.Count > 0)
+            {
+                uyarilar.Add(new
+                {
+                    tur = "bekleyen_iade",
+                    baslik = "Karar bekleyen iade",
+                    ozet = bekleyenIadeler.Count + " iade talebi karar bekliyor",
+                    adet = bekleyenIadeler.Count,
+
+                    // "yuksek": karşı tarafta parası bloke olmuş bir
+                    // müşteri bekliyor.
+                    oncelik = "yuksek",
+
+                    tumunuGorLink = "/iadeler",
+                    ogeler = bekleyenIadeler
+                });
+            }
 
             return Ok(new { uyarilar = uyarilar });
         }

@@ -543,6 +543,84 @@ namespace ETicaretAPI.Services
         }
 
 
+        // 8) ⭐ YENİ (Aşama 9) — İADE TALEBİ DURUM BİLDİRİMİ
+        //
+        // ⚠️ TEK ŞABLON, ÜÇ DURUM. Onay, red ve para iadesi için ayrı
+        // üç şablon yazmak cazipti; elendi. Üçünün iskeleti birebir
+        // aynı (selam + sipariş özeti + duruma göre bir kutu) ve
+        // ayrı yazsaydık yarın imza satırı değiştiğinde üçünü birden
+        // güncellemek gerekirdi — biri unutulurdu.
+        //
+        // ⚠️ Metot adı `IadeDurumBildirimi`, `IadeDurumu` DEĞİL:
+        // `IadeDurumu` bir sabit sınıfının adı ve aynı isim, gövde
+        // içinde `IadeDurumu.Reddedildi` yazmayı imkânsız kılardı.
+        public EmailIcerik IadeDurumBildirimi(Order siparis, ReturnRequest talep)
+        {
+            string baslik;
+            string renk;
+            string kutu;
+
+            if (talep.Durum == IadeDurumu.Reddedildi)
+            {
+                baslik = "İade Talebiniz Reddedildi";
+                renk = "#c0392b";
+
+                // ⚠️ Red nedeni HER ZAMAN yazılıyor (uç onu zorunlu
+                // tutuyor). "Reddedildi" tek başına bir cevap değil.
+                kutu = $@"
+<div style=""background-color:#fdf0ee;border-left:4px solid #c0392b;border-radius:6px;
+            padding:14px 16px;margin:18px 0;font-size:14px;line-height:1.55;"">
+  <b>Red nedeni</b><br/>{Kacir(talep.RedNedeni)}
+</div>";
+            }
+            else if (talep.Durum == IadeDurumu.ParaIadeEdildi)
+            {
+                baslik = "İade Tutarınız Ödendi";
+                renk = "#27ae60";
+
+                kutu = $@"
+<div style=""background-color:#eef8f1;border-left:4px solid #27ae60;border-radius:6px;
+            padding:14px 16px;margin:18px 0;font-size:14px;line-height:1.55;"">
+  <b>İade Bilgisi</b><br/>
+  {Para(talep.IadeTutari ?? 0)} tutarındaki iadeniz işleme alınmıştır.
+  Tutarın hesabınıza yansıması bankanıza bağlı olarak birkaç iş günü sürebilir.
+</div>";
+            }
+            else
+            {
+                baslik = "İade Talebiniz Onaylandı";
+                renk = "#e67e22";
+
+                // ⚠️ Onay maili müşteriye NE YAPACAĞINI söylüyor.
+                // Yalnızca "onaylandı" yazsaydık müşteri bekler,
+                // biz paketi bekler, iki taraf da karşıdakini
+                // beklerdi.
+                kutu = $@"
+<div style=""background-color:#fdf6ec;border-left:4px solid #e67e22;border-radius:6px;
+            padding:14px 16px;margin:18px 0;font-size:14px;line-height:1.55;"">
+  <b>Sırada ne var?</b><br/>
+  Ürünü orijinal paketiyle kargoya verebilirsiniz. Paket bize ulaştığında
+  kontrol edilecek ve ardından ödemeniz iade edilecektir.
+</div>";
+            }
+
+            var govde = $@"
+<p style=""margin:0 0 12px 0;"">Merhaba {Kacir(siparis.ShippingFullName)},</p>
+
+<p style=""margin:0 0 4px 0;"">
+  {Kacir(siparis.OrderNumber)} numaralı siparişinizle ilgili iade talebiniz
+  hakkında bir gelişme var.
+</p>
+
+{kutu}
+{SiparisOzetKutusu(siparis)}";
+
+            return new EmailIcerik(
+                $"İade talebiniz — {siparis.OrderNumber}",
+                Iskelet(baslik, renk, govde));
+        }
+
+
         // 7) ⭐ YENİ (5.5) — BEKLENEN ÜRÜN STOĞA GELDİ
         public EmailIcerik StokaGeldi(string adSoyad, string urunAdi, int urunId)
         {

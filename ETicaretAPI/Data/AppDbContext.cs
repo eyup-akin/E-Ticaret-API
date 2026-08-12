@@ -47,6 +47,9 @@ namespace ETicaretAPI.Data
         public DbSet<SupportTicket> SupportTickets { get; set; }
         public DbSet<SupportMessage> SupportMessages { get; set; }
 
+        // ⭐ YENİ (Aşama 9) — iade talepleri
+        public DbSet<ReturnRequest> ReturnRequests { get; set; }
+
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -401,6 +404,64 @@ namespace ETicaretAPI.Data
                  .WithMany()
                  .HasForeignKey(m => m.GonderenUserId)
                  .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            // ⭐ YENİ (Aşama 9) — İADE TALEPLERİ
+            modelBuilder.Entity<ReturnRequest>(e =>
+            {
+                // ⚠️⚠️ AYNI KALEM İÇİN İKİ AÇIK TALEP OLAMAZ.
+                //
+                // Kuralı kodda "önce sorgula, yoksa ekle" diye
+                // yazabilirdik ama iki istek aynı anda gelirse ikisi
+                // de "yok" cevabı alır ve müşteri aynı ürün için iki
+                // kez para iadesi alabilirdi. Kontrol ile yazma
+                // arasındaki mikrosaniye her zaman vardır.
+                // (StockAlert, AdminBasvuru, Phone'daki desen.)
+                //
+                // ⚠️ FİLTRE ŞART: reddedilmiş ya da parası ödenmiş
+                // talepler kuralın dışında. Filtresiz olsaydı bir kez
+                // reddedilen müşteri o kalem için BİR DAHA hiç talep
+                // açamazdı.
+                //
+                // ⚠️ OrderItemId NULL olanlar (tüm sipariş iadesi)
+                // SQL Server'da "birbirine eşit" sayılır — ki tam
+                // olarak istediğimiz bu: aynı sipariş için iki tane
+                // açık "tümünü iade et" talebi olmasın.
+                e.HasIndex(r => new { r.OrderId, r.OrderItemId })
+                 .IsUnique()
+                 .HasFilter("[Durum] <> 'reddedildi' AND [Durum] <> 'para_iade_edildi'");
+
+                // Admin listesi: duruma göre süz, tarihe göre sırala.
+                // Kolon sırası önemli: önce eşitlik, sonra sıralama.
+                e.HasIndex(r => new { r.Durum, r.TalepTarihi });
+
+                e.Property(r => r.Durum).HasMaxLength(25).IsRequired();
+                e.Property(r => r.Sebep).HasMaxLength(30).IsRequired();
+                e.Property(r => r.Aciklama).HasMaxLength(1000);
+                e.Property(r => r.RedNedeni).HasMaxLength(500);
+
+                // Para alanı — precision belirtilmezse SQL Server
+                // decimal(18,0) yapar ve KURUŞ KAYBOLUR. 12,50 TL
+                // veritabanına 13 yazılır ve bunu hiçbir hata mesajı
+                // söylemez.
+                e.Property(r => r.IadeTutari).HasPrecision(18, 2);
+
+                // Sipariş ve kalem gerçek FK, ikisi de Restrict:
+                // ikisi de ticari kayıt, silinmiyorlar.
+                e.HasOne<Order>()
+                 .WithMany()
+                 .HasForeignKey(r => r.OrderId)
+                 .OnDelete(DeleteBehavior.Restrict);
+
+                e.HasOne<OrderItem>()
+                 .WithMany()
+                 .HasForeignKey(r => r.OrderItemId)
+                 .OnDelete(DeleteBehavior.Restrict);
+
+                // ⚠️ Talebi açan kullanıcı SAKLANMIYOR — `Order.UserId`
+                // zaten var ve iade talebi siparişe bağlı. İkinci bir
+                // kopya tutsaydık ikisi bir gün ayrışabilirdi.
+                // Sahiplik kontrolü sipariş üzerinden yapılıyor.
             });
 
             // ⭐ YENİ — ADMİN BAŞVURULARI

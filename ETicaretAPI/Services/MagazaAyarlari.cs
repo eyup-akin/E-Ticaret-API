@@ -69,6 +69,22 @@
         public int SepetMaksAdet =>
             TamSayi("SepetMaksAdet", varsayilan: 99, enAz: 1, enFazla: 10000);
 
+        // ⭐ YENİ (Aşama 9) — İADE (CAYMA) SÜRESİ, GÜN.
+        //
+        // Teslimattan sonra kaç gün içinde iade talebi açılabilir?
+        //
+        // ⚠️ Varsayılan 14 KEYFİ DEĞİL: mesafeli satış mevzuatındaki
+        // cayma hakkı süresi. Aşama 10'da yazılacak sözleşme metni de
+        // aynı sayıyı söyleyecek — iki yerde iki farklı gün yazması,
+        // müşteriye sözleşmede vaat edileni sistemde vermemek olurdu.
+        //
+        // ⚠️ En az 7: yasal alt sınırın altına inmek mevzuata aykırı
+        // olurdu ve bir yapılandırma hatası bunu sessizce yapabilirdi.
+        // Ayar dosyasına 0 yazıp iadeyi tamamen kapatmak, kapatılması
+        // gereken bir hakkı kapatmak demekti.
+        public int IadeGunSayisi =>
+            TamSayi("IadeGunSayisi", varsayilan: 14, enAz: 7, enFazla: 365);
+
         public string SiparisNoOneki =>
             _config["Magaza:SiparisNoOneki"] ?? "SP";
 

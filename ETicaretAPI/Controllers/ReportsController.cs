@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using ETicaretAPI.Data;
 using ETicaretAPI.Services;
+using ETicaretAPI.Models;   // ⭐ YENİ (Aşama 9) — IadeDurumu
 
 namespace ETicaretAPI.Controllers
 {
@@ -536,7 +537,20 @@ namespace ETicaretAPI.Controllers
         // ============================================================
         //  🔴 GET /api/admin/reports/iptaller?baslangic=&bitis=
         //
-        //  İptal edilen siparişler, sebep dağılımı, kaybedilen ciro.
+        //  İptal edilen siparişler + ⭐ İADELER (Aşama 9), sebep
+        //  dağılımı, kaybedilen ciro.
+        //
+        //  ⚠️ UÇ ADI "iptaller" KALDI, içerik genişledi. Adını
+        //  değiştirmek admin panelindeki çağrıyı ve varsa kaydedilmiş
+        //  bağlantıları kırardı; kazanç yalnızca isim güzelliği
+        //  olurdu. Ekranda başlık "İptaller ve İadeler".
+        //
+        //  ⚠️ İKİSİ AYNI RAPORDA AMA AYRI BLOKLARDA — tek bir
+        //  "kayıplar" listesinde birleştirilmedi. İptal, ürün hiç
+        //  yola çıkmadan olur; iade, teslimattan sonra. Kargo bedeli,
+        //  stok hareketi ve müşteri deneyimi açısından iki farklı
+        //  olay; tek listede toplasaydık "neden kaybettik" sorusu
+        //  cevapsız kalırdı.
         //
         //  ⚠️ NEDEN GecerliSiparisler() KULLANMIYORUZ?
         //  O yardımcı "iptal olmayanları" getiriyor — bu raporun tam
@@ -610,6 +624,59 @@ namespace ETicaretAPI.Controllers
                 .CountAsync(o => o.CreatedAt >= aralik.BaslangicUtc
                               && o.CreatedAt < aralik.BitisUtcHaric);
 
+            // ---- ⭐ YENİ (Aşama 9) — İADELER ----
+            //
+            // ⚠️ YALNIZCA PARASI ÖDENMİŞ İADELER. Onaylanmış ama
+            // henüz ödenmemiş bir talep kayıp değil, bir yükümlülük;
+            // rapora katsaydık aynı para iki dönemde birden (onay ve
+            // ödeme aylarında) kayıp görünebilirdi.
+            //
+            // ⚠️ Tarih ölçütü `ParaIadeTarihi` — talep ya da karar
+            // tarihi değil. Kayıp, paranın çıktığı gün gerçekleşir.
+            // (İptalde `CancelledAt` seçilmesindeki mantığın aynısı.)
+            var iadeler = await (
+                from r in _context.ReturnRequests
+                where r.Durum == IadeDurumu.ParaIadeEdildi
+                   && r.ParaIadeTarihi != null
+                   && r.ParaIadeTarihi >= aralik.BaslangicUtc
+                   && r.ParaIadeTarihi < aralik.BitisUtcHaric
+                join o in _context.Orders on r.OrderId equals o.Id
+                orderby r.ParaIadeTarihi descending
+                select new
+                {
+                    iadeId = r.Id,
+                    siparisId = o.Id,
+                    siparisNo = o.OrderNumber,
+                    musteri = o.ShippingFullName,     // dondurulmuş ad
+                    sebep = r.Sebep,
+                    tutar = r.IadeTutari ?? 0,
+
+                    // Tüm sipariş mi tek kalem mi? Ekranda ayırt
+                    // edilmeli: 2.000 TL'lik siparişin 80 TL'lik
+                    // kalemi iade edildiyse "sipariş iade edildi"
+                    // demek yanlış olurdu.
+                    urunAdi = _context.OrderItems
+                        .Where(oi => oi.Id == r.OrderItemId)
+                        .Select(oi => oi.ProductName)
+                        .FirstOrDefault(),
+
+                    talepTarihi = r.TalepTarihi,
+                    iadeTarihi = r.ParaIadeTarihi
+                })
+                .ToListAsync();
+
+            // Sebep dağılımı — iptaldeki desenin aynısı, bellekte.
+            var iadeSebepDagilimi = iadeler
+                .GroupBy(x => x.sebep)
+                .Select(g => new
+                {
+                    sebep = g.Key,
+                    adet = g.Count(),
+                    tutar = g.Sum(x => x.tutar)
+                })
+                .OrderByDescending(x => x.adet)
+                .ToList();
+
             return Ok(new
             {
                 baslangic = aralik.BaslangicYerel.ToString("yyyy-MM-dd"),
@@ -626,7 +693,18 @@ namespace ETicaretAPI.Controllers
                 kaybedilenCiro = iptaller.Sum(x => x.tutar),
 
                 sebepler = sebepDagilimi,
-                siparisler = iptaller
+                siparisler = iptaller,
+
+                // ---- İADE BLOĞU ----
+                iadeSayisi = iadeler.Count,
+                iadeTutari = iadeler.Sum(x => x.tutar),
+
+                iadeOrani = toplamSiparis > 0
+                    ? Math.Round((decimal)iadeler.Count / toplamSiparis * 100, 1)
+                    : 0,
+
+                iadeSebepleri = iadeSebepDagilimi,
+                iadeler
             });
         }
 

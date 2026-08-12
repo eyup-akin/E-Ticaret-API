@@ -78,6 +78,12 @@ builder.Services.AddScoped<ETicaretAPI.Services.StokDefteri>();
 // tutardı.
 builder.Services.AddScoped<ETicaretAPI.Services.DestekYazismasi>();
 
+// ⭐ YENİ (Aşama 9) — iade tutarını hesaplayan servis.
+//
+// Singleton: durumu yok, DbContext'e bağlı değil, saf hesap.
+// (SepetHesaplayici ve KdvHesaplayici ile aynı ömür.)
+builder.Services.AddSingleton<ETicaretAPI.Services.IadeHesaplayici>();
+
 // ⭐ YENİ — mağaza ayarları.
 //
 // NEDEN Singleton, Scoped DEĞİL?

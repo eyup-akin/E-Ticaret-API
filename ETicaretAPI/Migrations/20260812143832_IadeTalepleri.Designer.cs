@@ -4,6 +4,7 @@ using ETicaretAPI.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace ETicaretAPI.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260812143832_IadeTalepleri")]
+    partial class IadeTalepleri
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -766,9 +769,6 @@ namespace ETicaretAPI.Migrations
 
                     b.Property<int?>("OrderItemId")
                         .HasColumnType("int");
-
-                    b.Property<DateTime?>("ParaIadeTarihi")
-                        .HasColumnType("datetime2");
 
                     b.Property<string>("RedNedeni")
                         .HasMaxLength(500)

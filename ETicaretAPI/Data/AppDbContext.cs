@@ -50,6 +50,10 @@ namespace ETicaretAPI.Data
         // ⭐ YENİ (Aşama 9) — iade talepleri
         public DbSet<ReturnRequest> ReturnRequests { get; set; }
 
+        // ⭐ YENİ (Aşama 10) — sözleşmeler ve onay kayıtları
+        public DbSet<Sozlesme> Sozlesmeler { get; set; }
+        public DbSet<SozlesmeOnayi> SozlesmeOnaylari { get; set; }
+
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -403,6 +407,43 @@ namespace ETicaretAPI.Data
                 e.HasOne<User>()
                  .WithMany()
                  .HasForeignKey(m => m.GonderenUserId)
+                 .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            // ⭐ YENİ (Aşama 10) — SÖZLEŞMELER
+            modelBuilder.Entity<Sozlesme>(e =>
+            {
+                // ⚠️ Tip başına tek AKTİF sürüm. Filtre olmasaydı aynı
+                // tipin ikinci sürümü hiç eklenemezdi.
+                e.HasIndex(x => new { x.Tip, x.AktifMi })
+                 .IsUnique()
+                 .HasFilter("[AktifMi] = 1");
+
+                e.Property(x => x.Tip).HasMaxLength(30).IsRequired();
+                e.Property(x => x.Icerik).IsRequired();
+            });
+
+            modelBuilder.Entity<SozlesmeOnayi>(e =>
+            {
+                // "Bu kullanıcı neleri onaylamış?" sorgusu.
+                e.HasIndex(x => new { x.UserId, x.OnayTarihi });
+
+                e.Property(x => x.IpAdresi).HasMaxLength(45);   // IPv6 dahil
+
+                e.HasOne<User>()
+                 .WithMany()
+                 .HasForeignKey(x => x.UserId)
+                 .OnDelete(DeleteBehavior.Restrict);
+
+                // ⚠️ Onay hangi SÜRÜME verildi — sözleşme silinemez.
+                e.HasOne<Sozlesme>()
+                 .WithMany()
+                 .HasForeignKey(x => x.SozlesmeId)
+                 .OnDelete(DeleteBehavior.Restrict);
+
+                e.HasOne<Order>()
+                 .WithMany()
+                 .HasForeignKey(x => x.OrderId)
                  .OnDelete(DeleteBehavior.Restrict);
             });
 

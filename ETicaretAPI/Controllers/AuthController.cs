@@ -48,22 +48,36 @@ namespace ETicaretAPI.Controllers
         private readonly ETicaretAPI.Services.IEmailGonderici _email;
         private readonly IConfiguration _config;
 
+        // ⭐ YENİ (Aşama 10) — sözleşme onaylarını yazan ortak servis
+        private readonly ETicaretAPI.Services.SozlesmeOnayServisi _onayServisi;
+
         public AuthController(
             AppDbContext context,
             ETicaretAPI.Services.TokenService tokenService,
             ETicaretAPI.Services.IEmailGonderici email,   // ⭐ YENİ
-            IConfiguration config)                        // ⭐ YENİ
+            IConfiguration config,                        // ⭐ YENİ
+            ETicaretAPI.Services.SozlesmeOnayServisi onayServisi)   // ⭐ YENİ (Aşama 10)
         {
             _context = context;
             _tokenService = tokenService;
             _email = email;     // ⭐ YENİ
             _config = config;   // ⭐ YENİ
+            _onayServisi = onayServisi;
         }
 
         // POST /api/auth/register
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] RegisterDto dto)
         {
+            // ⭐ YENİ (Aşama 10) — sözleşme onayı olmadan kayıt yok.
+            if (!dto.SozlesmeOnayi)
+            {
+                return BadRequest(new
+                {
+                    mesaj = "Kayıt için gizlilik politikası ve kullanım koşullarını onaylaman gerekiyor."
+                });
+            }
+
             // ⭐ YENİ — E-POSTAYI NORMALLEŞTİR
             //
             // Neden? "  Ali@Mail.COM  " ile "ali@mail.com" aynı adrestir.
@@ -122,6 +136,16 @@ namespace ETicaretAPI.Controllers
             // "sunucu hatası" görürdü.
             try
             {
+                await _context.SaveChangesAsync();
+
+                // ⭐ YENİ (Aşama 10) — onay kaydı.
+                // Kullanıcı kaydedildikten SONRA: onay satırı UserId'ye
+                // FK ile bağlı, kullanıcı olmadan yazılamaz.
+                await _onayServisi.EkleAsync(
+                    yeniKullanici.Id,
+                    SozlesmeTipi.KayitSozlesmeleri,
+                    HttpContext.Connection.RemoteIpAddress?.ToString());
+
                 await _context.SaveChangesAsync();
             }
             catch (DbUpdateException)
@@ -782,6 +806,13 @@ namespace ETicaretAPI.Controllers
 
                 await _context.Favorites
                     .Where(f => f.UserId == userId)
+                    .ExecuteDeleteAsync();
+
+                // ⭐ YENİ (Aşama 10) — telefon defteri de kişisel veri.
+                // ⚠️ Adres silme BUNDAN ÖNCE olmalı: adresler telefona
+                // FK ile bağlı (SET NULL olsa da sıra tutarlı kalsın).
+                await _context.Phones
+                    .Where(p => p.UserId == userId)
                     .ExecuteDeleteAsync();
 
                 // ---------- 6) OTURUMLARI KAPAT ----------

@@ -48,6 +48,10 @@ namespace ETicaretAPI.DTOs
         [MaxLength(64, ErrorMessage = "Geçersiz istek anahtarı!")]
         public string? IdempotencyKey { get; set; }
 
+        // ⭐ YENİ (Aşama 10) — mesafeli satış sözleşmesi + ön bilgilendirme
+        // onayı. Sunucu true olmasını şart koşuyor.
+        public bool SozlesmeOnayi { get; set; }
+
 
     }
 }

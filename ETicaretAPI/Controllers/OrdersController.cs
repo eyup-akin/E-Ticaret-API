@@ -18,6 +18,9 @@ namespace ETicaretAPI.Controllers
         private readonly IConfiguration _config;
         private readonly KuponServisi _kuponServisi;     // ⭐
 
+        // ⭐ YENİ (Aşama 10) — sözleşme onaylarını yazan ortak servis
+        private readonly SozlesmeOnayServisi _onaylar;
+
         // ⭐ YENİ — e-posta bildirimleri için üç bağımlılık
         //
         // _email     : gönderme sözleşmesi. Arkada konsol mu SMTP mi
@@ -63,6 +66,7 @@ namespace ETicaretAPI.Controllers
             MagazaAyarlari ayarlar,                       // ⭐ YENİ (4.1)
             SepetHesaplayici hesaplayici,                 // ⭐ YENİ (4.2)
             KdvHesaplayici kdv,                           // ⭐ YENİ (4.3)
+            SozlesmeOnayServisi onaylar,                  // ⭐ YENİ (Aşama 10)
             ILogger<OrdersController> log)                // ⭐ YENİ
         {
             _context = context;
@@ -75,6 +79,7 @@ namespace ETicaretAPI.Controllers
             _ayarlar = ayarlar;                           // ⭐ YENİ
             _hesaplayici = hesaplayici;                   // ⭐ YENİ
             _kdv = kdv;                                   // ⭐ YENİ
+            _onaylar = onaylar;                           // ⭐ YENİ
         }
 
 
@@ -302,6 +307,15 @@ namespace ETicaretAPI.Controllers
                 //    DEĞİLDİR: iki istek aynı anda buraya girip ikisi
                 //    de "yok" cevabı alabilir. Garantiyi aşağıdaki
                 //    unique index + DbUpdateException yakalaması verir.
+            }
+
+            // ⭐ YENİ (Aşama 10) — sözleşme onayı olmadan sipariş yok.
+            if (!dto.SozlesmeOnayi)
+            {
+                return BadRequest(new
+                {
+                    mesaj = "Siparişi tamamlamak için mesafeli satış sözleşmesini onaylaman gerekiyor."
+                });
             }
 
             // 1) Adres gerçekten bu kullanıcının mı?
@@ -916,6 +930,14 @@ namespace ETicaretAPI.Controllers
 
                 _context.Orders.Add(siparis);
                 await _context.SaveChangesAsync(); // siparis.Id burada üretilir
+
+                // ⭐ YENİ (Aşama 10) — onay kaydı AYNI TRANSACTION'DA.
+                // Sipariş varsa onayı da vardır; ikisi ayrılamaz.
+                await _onaylar.EkleAsync(
+                    userId,
+                    SozlesmeTipi.SiparisSozlesmeleri,
+                    HttpContext.Connection.RemoteIpAddress?.ToString(),
+                    siparis.Id);
 
                 // 7) Sipariş detaylarını siparişe bağla ve kaydet
                 foreach (var detay in siparisDetaylari)

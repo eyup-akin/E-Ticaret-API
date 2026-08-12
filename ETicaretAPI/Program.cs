@@ -84,6 +84,9 @@ builder.Services.AddScoped<ETicaretAPI.Services.DestekYazismasi>();
 // (SepetHesaplayici ve KdvHesaplayici ile aynı ömür.)
 builder.Services.AddSingleton<ETicaretAPI.Services.IadeHesaplayici>();
 
+// ⭐ YENİ (Aşama 10) — sözleşme onaylarını yazan servis (DbContext'e bağlı).
+builder.Services.AddScoped<ETicaretAPI.Services.SozlesmeOnayServisi>();
+
 // ⭐ YENİ — mağaza ayarları.
 //
 // NEDEN Singleton, Scoped DEĞİL?

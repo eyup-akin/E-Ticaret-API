@@ -44,6 +44,13 @@ namespace ETicaretAPI.Controllers
         // müşterinin hiç görmeyeceği ürünü indirmek olurdu.
         private const int BolumUrunSayisi = 10;
 
+        // ⭐ YENİ (2026-08-12) — "En Popüler Ürünler" hangi dönemi sayar?
+        //
+        // ⚠️ Sayı burada, sorgunun içinde değil: pencere bir iş kararı
+        // ve ileride mağaza ayarlarına taşınabilir. Sorguya gömülü
+        // olsaydı değiştirmek için sorguyu okumak gerekirdi.
+        private const int PopulerGunSayisi = 30;
+
         // Resim yükleme kuralları — tek yerde dursun
         private const long MaxDosyaBoyutu = 5 * 1024 * 1024; // 5 MB
         private static readonly string[] IzinliUzantilar = { ".jpg", ".jpeg", ".png", ".webp" };
@@ -1009,36 +1016,43 @@ namespace ETicaretAPI.Controllers
                 minFiyat: null, maxFiyat: null, kategoriler: null,
                 minPuan: null, sadeceStokta: false);
 
-            // ---- 1) EN POPÜLER ÜRÜNLER — tüm zamanların satışı ----
+            // ---- 1) EN POPÜLER ÜRÜNLER — son 30 günün satışı ----
             //
-            // ⚠️ ZAMAN PENCERESİ KALDIRILDI (2026-08-12). Bölüm önce
-            // "Şu an revaçta" adıyla **son 7 günü** sayıyordu. İki
-            // sorun vardı:
+            // ⚠️ PENCERE ÜÇ KEZ DEĞİŞTİ, SON HALİ 30 GÜN.
+            //   7 gün  → vitrine tek ürün düşürüyordu (son 7 günde
+            //            satılan 7 üründen 6'sı arşivli/pasif).
+            //   sınırsız → bölüm "tüm zamanlar" oldu.
+            //   30 gün → şimdiki karar.
             //
-            //   1) Adı "En Popüler Ürünler" oldu ve bu ad TÜM ZAMANLAR
-            //      iddiasıdır. Altında 7 günlük pencere bırakmak,
-            //      başlığın yalan söylemesi olurdu.
-            //   2) Pencere bölümü neredeyse boşaltıyordu: son 7 günde
-            //      satılan 7 üründen 6'sı arşivli/pasif olduğu için
-            //      vitrine tek ürün düşüyordu.
+            // Otuz gün "yakın dönem" için makul bir hafıza: bir aylık
+            // satış hem mevsimsel dalgayı yakalıyor hem de iki yıl
+            // önce çok satmış ama artık kimsenin bakmadığı ürünü
+            // vitrinde tutmuyor. Ölçüldü: bugün sınırsızla aynı 4
+            // ürünü veriyor, yani kayıp yok.
             //
-            // ⚠️ "Şu an revaçta" fikri ÖLMEDİ, ERTELENDİ: zaman
-            // pencereli bir bölüm ancak katalogda düzenli satış
-            // olunca anlam taşır. Bugünkü veriyle iki bölüm de aynı
-            // ürünleri gösterirdi ve ikisi birden değersizleşirdi.
+            // ⚠️ BAŞLIK İLE ÖLÇÜ ARASINDA BİLİNEN GERİLİM VAR.
+            // "En Popüler Ürünler" adı tüm zamanlar çağrıştırıyor ama
+            // ölçü 30 günlük. Bu bilinçli bir tercih: müşteri için
+            // "şu sıralar çok satan" daha yararlı. Pencere bir gün
+            // ekranda yazılmak istenirse başlığın altına "son 30
+            // günde" alt yazısı eklenmeli — bugün eklenmedi çünkü
+            // vitrinde ölçü açıklaması gürültü yapıyor.
             //
-            // ⚠️ Ölçü `SiralamayiUygula("populer")` ile AYNI: iptal
-            // edilen siparişler sayılmıyor, adet toplanıyor. Izgaranın
-            // "popüler" sıralamasıyla aynı sonucu vermeli, yoksa
-            // "Tümünü gör" müşteriyi başka bir listeye götürürdü.
+            // ⚠️ Ölçünün geri kalanı `SiralamayiUygula("populer")` ile
+            // AYNI: iptal edilen siparişler sayılmıyor, adet
+            // toplanıyor. Tek fark pencere; "Tümünü gör" ızgaraya
+            // götürdüğünde müşteri aynı ürünlerin devamını görüyor.
             //
             // ⚠️ Görünürlük süzgeci sorgunun İÇİNDE (`gorunur.Any`):
             // EF bunu EXISTS'e çeviriyor, yani tüm ürün id'lerini
             // belleğe çekmeden filtreliyor.
+            var populerEsigi = DateTime.UtcNow.AddDays(-PopulerGunSayisi);
+
             var populerIdler = await _context.OrderItems
                 .Where(oi => gorunur.Any(p => p.Id == oi.ProductId))
                 .Where(oi => _context.Orders.Any(o => o.Id == oi.OrderId
-                                                   && o.Status != SiparisDurumlari.Iptal))
+                                                   && o.Status != SiparisDurumlari.Iptal
+                                                   && o.CreatedAt >= populerEsigi))
                 .GroupBy(oi => oi.ProductId)
                 .OrderByDescending(g => g.Sum(x => x.Quantity))
                 .ThenBy(g => g.Key)     // eşitlikte kararlı sıra
@@ -1101,6 +1115,28 @@ namespace ETicaretAPI.Controllers
             //
             // ⚠️ Gezilenlerin KENDİSİ dışarıda: müşteri onları bir
             // üstteki şeritte zaten görüyor.
+            //
+            // ⚠️⚠️ POPÜLER VE FAVORİ ŞERİTLERİNDEKİLER DE DIŞARIDA
+            // (⭐ YENİ 2026-08-12 — cihazda fark edildi).
+            //
+            // Sorun: "Sana özel" popülerlik sırasına göre diziliyordu
+            // ve katalog küçük olduğu için aynı çok satanlar üç şeritte
+            // birden çıkıyordu. Müşterinin gördüğü, kişiselleştirmenin
+            // çalışmadığıydı — üç farklı başlık, aynı ürünler.
+            //
+            // ⚠️ ELEME NEDEN SADECE BU BÖLÜMDE?
+            // "En popüler" ve "en çok favorilenen" birer İDDİA: en çok
+            // satanı listeden çıkarmak başlığı yalan yapar. "Sana özel"
+            // ise bir ÖNERİ — içinden ürün çıkarmak onu yanlış değil,
+            // sadece daha yararlı yapar. Bu yüzden eleme burada.
+            //
+            // ⚠️ "Yeni gelenler" elenmiyor: yeni ürünün çok satan olma
+            // ihtimali zaten düşük ve o bölüm bunun ALTINDA çiziliyor.
+            var vitrindeGosterilenler = populerIdler
+                .Concat(favoriIdler)
+                .Distinct()
+                .ToList();
+
             var ilgiliKategoriler = await gorunur
                 .Where(p => sonGezilenIdler.Contains(p.Id))
                 .Select(p => p.CategoryId)
@@ -1111,7 +1147,8 @@ namespace ETicaretAPI.Controllers
                 ? new List<int>()
                 : await gorunur
                     .Where(p => ilgiliKategoriler.Contains(p.CategoryId)
-                             && !gezilen.Contains(p.Id))
+                             && !gezilen.Contains(p.Id)
+                             && !vitrindeGosterilenler.Contains(p.Id))
                     // Popülerlik: `SiralamayiUygula("populer")` ile
                     // aynı ölçü — iptal edilen siparişler sayılmıyor.
                     .OrderByDescending(p => _context.OrderItems

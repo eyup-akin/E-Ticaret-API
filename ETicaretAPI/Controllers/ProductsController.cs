@@ -1009,23 +1009,36 @@ namespace ETicaretAPI.Controllers
                 minFiyat: null, maxFiyat: null, kategoriler: null,
                 minPuan: null, sadeceStokta: false);
 
-            // ---- 1) ŞU AN REVAÇTA — son 7 günün satışı ----
+            // ---- 1) EN POPÜLER ÜRÜNLER — tüm zamanların satışı ----
             //
-            // ⚠️ ZAMAN PENCERESİ ŞART. Penceresiz olsaydı bu bölüm
-            // "en çok satan"ın kopyası olurdu; iki bölüm de birbirini
-            // değersizleştirirdi. "Tüm zamanların en çok satanı" ile
-            // "bu haftanın yükselişi" farklı sorulardır.
+            // ⚠️ ZAMAN PENCERESİ KALDIRILDI (2026-08-12). Bölüm önce
+            // "Şu an revaçta" adıyla **son 7 günü** sayıyordu. İki
+            // sorun vardı:
+            //
+            //   1) Adı "En Popüler Ürünler" oldu ve bu ad TÜM ZAMANLAR
+            //      iddiasıdır. Altında 7 günlük pencere bırakmak,
+            //      başlığın yalan söylemesi olurdu.
+            //   2) Pencere bölümü neredeyse boşaltıyordu: son 7 günde
+            //      satılan 7 üründen 6'sı arşivli/pasif olduğu için
+            //      vitrine tek ürün düşüyordu.
+            //
+            // ⚠️ "Şu an revaçta" fikri ÖLMEDİ, ERTELENDİ: zaman
+            // pencereli bir bölüm ancak katalogda düzenli satış
+            // olunca anlam taşır. Bugünkü veriyle iki bölüm de aynı
+            // ürünleri gösterirdi ve ikisi birden değersizleşirdi.
+            //
+            // ⚠️ Ölçü `SiralamayiUygula("populer")` ile AYNI: iptal
+            // edilen siparişler sayılmıyor, adet toplanıyor. Izgaranın
+            // "popüler" sıralamasıyla aynı sonucu vermeli, yoksa
+            // "Tümünü gör" müşteriyi başka bir listeye götürürdü.
             //
             // ⚠️ Görünürlük süzgeci sorgunun İÇİNDE (`gorunur.Any`):
             // EF bunu EXISTS'e çeviriyor, yani tüm ürün id'lerini
             // belleğe çekmeden filtreliyor.
-            var esikTarihi = DateTime.UtcNow.AddDays(-7);
-
-            var revactaIdler = await _context.OrderItems
+            var populerIdler = await _context.OrderItems
                 .Where(oi => gorunur.Any(p => p.Id == oi.ProductId))
                 .Where(oi => _context.Orders.Any(o => o.Id == oi.OrderId
-                                                   && o.Status != SiparisDurumlari.Iptal
-                                                   && o.CreatedAt >= esikTarihi))
+                                                   && o.Status != SiparisDurumlari.Iptal))
                 .GroupBy(oi => oi.ProductId)
                 .OrderByDescending(g => g.Sum(x => x.Quantity))
                 .ThenBy(g => g.Key)     // eşitlikte kararlı sıra
@@ -1119,7 +1132,7 @@ namespace ETicaretAPI.Controllers
             // olduğu için işin çoğu tekrar olurdu. Yukarıdaki
             // sorgular yalnızca ID topladı; ürünün kendisi, resmi ve
             // puanı bir kez geliyor.
-            var tumIdler = revactaIdler
+            var tumIdler = populerIdler
                 .Concat(favoriIdler)
                 .Concat(yeniIdler)
                 .Concat(sonGezilenIdler)
@@ -1172,13 +1185,20 @@ namespace ETicaretAPI.Controllers
                 bolumler.Add(new { anahtar, baslik, urunler = liste });
             }
 
-            // ⚠️ SIRA BİLİNÇLİ: önce mağazanın canlı nabzı (revaçta),
-            // sonra müşterinin kendi izi (son gezdikleri ve ondan
-            // türeyen öneri — ikisi yan yana durmalı, biri diğerinin
-            // sebebi), sonra genel keşif (favori, yeni).
-            BolumEkle("revacta", "Şu an revaçta", revactaIdler);
+            // ⚠️ SIRA BİLİNÇLİ (⭐ DEĞİŞTİ 2026-08-12): önce müşterinin
+            // KENDİ izi — son gezdikleri ve ondan türeyen öneri; ikisi
+            // yan yana durmalı çünkü biri diğerinin sebebi. Sonra
+            // mağazanın söyledikleri: en çok satan, en çok favorilenen,
+            // en yeni.
+            //
+            // Popüler bölümü önce en üstteydi; kişisel şeritlerin
+            // altına alındı. Vitrin "herkese aynı şey" ile değil,
+            // müşteriye ait olanla açılıyor. Geçmişi olmayan müşteride
+            // (ilk açılış) o iki bölüm hiç gelmiyor ve sayfa zaten
+            // popülerle başlıyor.
             BolumEkle("son_gezilen", "Son gezdiğin ürünler", sonGezilenIdler);
             BolumEkle("sana_ozel", "Sana özel", sanaOzelIdler);
+            BolumEkle("populer", "En Popüler Ürünler", populerIdler);
             BolumEkle("favori", "En çok favorilenen", favoriIdler);
             BolumEkle("yeni", "Yeni gelenler", yeniIdler);
 

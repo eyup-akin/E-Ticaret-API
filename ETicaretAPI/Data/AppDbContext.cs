@@ -40,6 +40,9 @@ namespace ETicaretAPI.Data
         // ⭐ YENİ — admin olma başvuruları
         public DbSet<AdminBasvuru> AdminBasvurular { get; set; }
 
+        // ⭐ YENİ (4.9) — müşterinin telefon defteri
+        public DbSet<Phone> Phones { get; set; }
+
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -266,6 +269,69 @@ namespace ETicaretAPI.Data
                 // (null olanlar) önce daraltıyor.
                 e.HasIndex(s => new { s.NotifiedAt, s.ProductId });
             });
+
+            // ⭐ YENİ (4.9) — TELEFON DEFTERİ
+            modelBuilder.Entity<Phone>(e =>
+            {
+                // ⚠️ AYNI MÜŞTERİ AYNI NUMARAYI İKİ KEZ KAYDEDEMEZ.
+                //
+                // Kodda "önce sorgula, yoksa ekle" diye yazmak
+                // yetmezdi: iki istek aynı anda gelirse ikisi de
+                // "yok" cevabı alır ve iki satır oluşur. StockAlert,
+                // AdminBasvuru ve Order.IdempotencyKey'de alınan
+                // dersin aynısı — garantiyi kod değil veritabanı verir.
+                //
+                // ⚠️ GLOBAL BENZERSİZ DEĞİL, KULLANICI BAZINDA.
+                // Bir ailenin ya da bir ortak ofisin aynı numarayı
+                // paylaşması tamamen meşru. Global unique koysaydık
+                // ikinci kişi kendi numarasını kaydedemez, üstelik
+                // hata mesajı "bu numara başkasında kayıtlı" diyerek
+                // başka bir hesabın bilgisini sızdırırdı.
+                e.HasIndex(p => new { p.UserId, p.Numara })
+                 .IsUnique();
+
+                // Kanonik biçim tam 10 hane; 20 pay bırakıyor.
+                // ⚠️ Uzunluk şart — nvarchar(max) kolonuna index
+                // kurulamaz ve yukarıdaki unique index bu kolonda.
+                e.Property(p => p.Numara)
+                 .HasMaxLength(20)
+                 .IsRequired();
+
+                e.Property(p => p.Etiket)
+                 .HasMaxLength(30)
+                 .IsRequired();
+
+                // Kullanıcı ile ilişki — Review'daki desenin aynısı:
+                // kullanıcı satırı silinmeye kalkılırsa ENGELLE.
+                // Hesap kapatma zaten anonimleştirme yapıyor, satırı
+                // silmiyor; bu kısıt o kararın veritabanındaki karşılığı.
+                e.HasOne<User>()
+                 .WithMany()
+                 .HasForeignKey(p => p.UserId)
+                 .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            // ⭐ YENİ (4.9) — ADRES → TELEFON İLİŞKİSİ
+            //
+            // ⚠️ NEDEN GERÇEK FK? Projede FK'lar tarihsel olarak eksik
+            // (Aşama 11'in borcu) çünkü modellerde gezinti özelliği yok
+            // ve EF ilişkiyi çıkaramıyor. Burada ilişki AÇIKÇA
+            // tanımlanıyor: gezinti özelliği olmadan da FK kurulabilir
+            // (Review'da aynısı yapılmıştı). Yeni tablolar borcu
+            // büyütmesin.
+            //
+            // ⚠️ ON DELETE SET NULL — silme davranışı kararı:
+            //   • Cascade olsaydı numarayı silen müşteri ADRESİNİ de
+            //     kaybederdi. Kimse bunu beklemez.
+            //   • Restrict olsaydı numara, ona bağlı adres durdukça
+            //     silinemezdi — müşteri çıkmaza girerdi.
+            //   • SetNull adresi telefonsuz bırakıyor; sipariş akışı
+            //     o adres için yeniden numara seçilmesini istiyor.
+            modelBuilder.Entity<Address>()
+                .HasOne<Phone>()
+                .WithMany()
+                .HasForeignKey(a => a.PhoneId)
+                .OnDelete(DeleteBehavior.SetNull);
 
             // ⭐ YENİ — ADMİN BAŞVURULARI
             modelBuilder.Entity<AdminBasvuru>(e =>

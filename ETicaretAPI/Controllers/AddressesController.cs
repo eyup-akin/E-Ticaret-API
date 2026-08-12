@@ -5,6 +5,7 @@ using System.Security.Claims;
 using ETicaretAPI.Data;
 using ETicaretAPI.Models;
 using ETicaretAPI.DTOs;
+using ETicaretAPI.Services;
 
 namespace ETicaretAPI.Controllers
 {
@@ -31,17 +32,30 @@ namespace ETicaretAPI.Controllers
         {
             var userId = GetUserId();
 
-            var addresses = await _context.Addresses
-                .Where(a => a.UserId == userId)
-                .Select(a => new AddressDto
-                {
-                    Id = a.Id,
-                    Title = a.Title,
-                    FullAddress = a.FullAddress,
-                    City = a.City,
-                    Phone = a.Phone          // ⭐
-                })
-                .ToListAsync();
+            // ⭐ DEĞİŞTİ (4.9) — telefon artık kolonda değil, JOIN'de.
+            //
+            // ⚠️ LEFT JOIN (DefaultIfEmpty), INNER DEĞİL. Numarası
+            // silinmiş bir adres INNER JOIN'de listeden komple
+            // kaybolurdu — müşteri adresinin silindiğini sanardı.
+            // "INNER JOIN satır düşürür" dersi OrderItem'da alınmıştı.
+            var satirlar = await (
+                from a in _context.Addresses
+                where a.UserId == userId
+                join p in _context.Phones on a.PhoneId equals p.Id into pg
+                from p in pg.DefaultIfEmpty()
+                select new { a.Id, a.Title, a.FullAddress, a.City, a.PhoneId, p!.Numara }
+            ).ToListAsync();
+
+            // Gorunum biçimi C# tarafında üretiliyor (SQL'e çevrilemez).
+            var addresses = satirlar.Select(x => new AddressDto
+            {
+                Id = x.Id,
+                Title = x.Title,
+                FullAddress = x.FullAddress,
+                City = x.City,
+                PhoneId = x.PhoneId,
+                Phone = x.Numara == null ? null : TelefonBicimi.Goster(x.Numara)
+            }).ToList();
 
             return Ok(addresses);
         }
@@ -57,13 +71,24 @@ namespace ETicaretAPI.Controllers
 
             var userId = GetUserId();
 
+            // ⭐ YENİ (4.9) — seçilen numara gerçekten bu kullanıcının mı?
+            //
+            // ⚠️ Kontrol SORGUNUN İÇİNDE (`&& p.UserId == userId`),
+            // ayrı bir if olarak değil. Ayrı yazsaydık bir gün
+            // birleştirilirken unutulabilirdi ve başkasının
+            // numarasını kendi adresine bağlamak mümkün olurdu.
+            if (!await TelefonBuKullanicininMi(dto.PhoneId, userId))
+            {
+                return BadRequest(new { mesaj = "Geçerli bir telefon numarası seçmelisin!" });
+            }
+
             var address = new Address
             {
                 UserId = userId,
                 Title = dto.Title,
                 FullAddress = dto.FullAddress,
                 City = dto.City,
-                Phone = dto.Phone.Trim()     // ⭐
+                PhoneId = dto.PhoneId        // ⭐ DEĞİŞTİ (4.9)
             };
 
             _context.Addresses.Add(address);
@@ -90,10 +115,16 @@ namespace ETicaretAPI.Controllers
                 return NotFound(new { mesaj = "Adres bulunamadı!" });
             }
 
+            // ⭐ YENİ (4.9) — eklemedeki kontrolün aynısı
+            if (!await TelefonBuKullanicininMi(dto.PhoneId, userId))
+            {
+                return BadRequest(new { mesaj = "Geçerli bir telefon numarası seçmelisin!" });
+            }
+
             address.Title = dto.Title;
             address.FullAddress = dto.FullAddress;
             address.City = dto.City;
-            address.Phone = dto.Phone.Trim();   // ⭐
+            address.PhoneId = dto.PhoneId;      // ⭐ DEĞİŞTİ (4.9)
 
             await _context.SaveChangesAsync();
             return Ok(new { mesaj = "Adres güncellendi!" });
@@ -116,6 +147,15 @@ namespace ETicaretAPI.Controllers
             _context.Addresses.Remove(address);
             await _context.SaveChangesAsync();
             return Ok(new { mesaj = "Adres silindi!" });
+        }
+
+        // ⭐ YENİ (4.9) — ekleme ve düzenlemenin ortak kontrolü.
+        //
+        // İki tüketicisi olduğu an metoda çıkarıldı; tek yerde
+        // kalsaydı orada durmaya devam ederdi.
+        private Task<bool> TelefonBuKullanicininMi(int phoneId, int userId)
+        {
+            return _context.Phones.AnyAsync(p => p.Id == phoneId && p.UserId == userId);
         }
     }
 }

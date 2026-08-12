@@ -312,6 +312,33 @@ namespace ETicaretAPI.Controllers
                 return BadRequest(new { mesaj = "Geçerli bir adres seçmelisin!" });
             }
 
+            // ⭐ YENİ (4.9) — 1b) Adresin telefonu.
+            //
+            // ⚠️ AYRI SORGU, ÇÜNKÜ ADRESTE ARTIK NUMARA YOK — sadece
+            // ona işaret eden bir id var (bkz. Address.PhoneId).
+            //
+            // ⚠️ TELEFONSUZ ADRESLE SİPARİŞ ALINMIYOR. Müşteri
+            // numarayı adres oluşturduktan SONRA silmiş olabilir
+            // (FK'da SET NULL) — o durumda kargo etiketi telefonsuz
+            // basılır ve kurye adresi bulamazsa kimseyi arayamaz.
+            // Boş bir alanla devam etmektense burada durup seçim
+            // istemek doğru: "yanlış/eksik veriyle devam etme".
+            var adresTelefonu = adres.PhoneId == null
+                ? null
+                : await _context.Phones
+                    .Where(p => p.Id == adres.PhoneId && p.UserId == userId)
+                    .Select(p => p.Numara)
+                    .FirstOrDefaultAsync();
+
+            if (adresTelefonu == null)
+            {
+                return BadRequest(new
+                {
+                    mesaj = "Bu adrese bağlı telefon numarası yok. Adresi düzenleyip " +
+                            "bir numara seçmelisin."
+                });
+            }
+
             // 2) Kart gerçekten bu kullanıcının mı?
             var kart = await _context.Cards
                 .FirstOrDefaultAsync(c => c.Id == dto.CardId && c.UserId == userId);
@@ -817,7 +844,16 @@ namespace ETicaretAPI.Controllers
                     ShippingTitle = adres.Title,
                     ShippingCity = adres.City,
                     ShippingFullAddress = adres.FullAddress,
-                    ShippingPhone = adres.Phone,       // ⭐
+                    // ⭐ DEĞİŞTİ (4.9) — numara canlı tablodan okundu ama
+                    // buraya KOPYA olarak yazılıyor; FK verilmedi.
+                    //
+                    // ⚠️ GÖSTERİM BİÇİMİ DONDURULUYOR ("0552 808 31 29"),
+                    // kanonik hali değil. Bu alanın tek işi okunmak:
+                    // kargo etiketi, sipariş detayı ve bilgilendirme
+                    // maili onu olduğu gibi basıyor. Kanonik hali
+                    // dondursaydık üç tüketicinin de biçimlendirmeyi
+                    // hatırlaması gerekirdi ve biri unuturdu.
+                    ShippingPhone = TelefonBicimi.Goster(adresTelefonu),
 
                     // ⭐ KUPON — dondurulmuş
                     SubTotal = araToplam,

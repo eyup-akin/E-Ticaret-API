@@ -190,6 +190,31 @@ namespace ETicaretAPI.Controllers
                 .Select(a => new { a.Id, a.Title, a.City, a.FullAddress })
                 .ToListAsync();
 
+            // ⭐ YENİ (4.9) — telefon defteri.
+            //
+            // ⚠️ NEDEN ADMİN BUNU GÖRÜYOR — oysa kart ve adres
+            // YÖNETİMİ panelde bilinçli olarak yok?
+            // Fark yönetmek ile görmek arasında: admin buradan numara
+            // ekleyemiyor, silemiyor, düzenleyemiyor. Sadece
+            // müşteriyle ilgili bir destek/kargo sorusunda "hangi
+            // numaraları kayıtlı?" sorusunu cevaplıyor. Aynı ekran
+            // adresleri de zaten salt okunur gösteriyor.
+            var numaralar = await _context.Phones
+                .Where(p => p.UserId == id)
+                .OrderByDescending(p => p.VarsayilanMi)
+                .ThenBy(p => p.Id)
+                .ToListAsync();
+
+            // Gösterim biçimi C#'ta üretiliyor — SQL'e çevrilemez.
+            var numaraListesi = numaralar.Select(p => new
+            {
+                id = p.Id,
+                gorunum = TelefonBicimi.Goster(p.Numara),
+                etiket = p.Etiket,
+                dogrulandiMi = p.DogrulandiMi,
+                varsayilanMi = p.VarsayilanMi
+            }).ToList();
+
             // Kayıtlı kartları — SADECE son 4 hane.
             // Tam numara ve CVV zaten veritabanında YOK, olsaydı da göndermezdik.
             var kartlar = await _context.Cards
@@ -256,11 +281,13 @@ namespace ETicaretAPI.Controllers
                         : 0,
 
                     adresSayisi = adresler.Count,
-                    kartSayisi = kartlar.Count
+                    kartSayisi = kartlar.Count,
+                    numaraSayisi = numaraListesi.Count   // ⭐ YENİ (4.9)
                 },
 
                 siparisler = siparisler,
                 adresler = adresler,
+                numaralar = numaraListesi,               // ⭐ YENİ (4.9)
                 kartlar = kartlar,
                 loglar = await _context.AuditLogs
                     .Where(l => l.TargetUserId == id)

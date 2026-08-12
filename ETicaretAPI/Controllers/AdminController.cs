@@ -832,10 +832,64 @@ namespace ETicaretAPI.Controllers
             }
 
 
+            // ---------- 4) CEVAPLANMAMIŞ DESTEK TALEPLERİ ----------
+            //
+            // ⚠️ SADECE "acik" DURUMU. "yanitlandi" olanlarda top
+            // müşteride; adminin yapacağı bir şey yok ve onları da
+            // listeye koymak paneli "yapılacak iş" olmayan satırlarla
+            // doldururdu. Uyarı listesi bir GÖREV listesi.
+            //
+            // ⚠️ Tüm adminler görüyor (başvurulardan farklı olarak):
+            // destek herkesin işi, başvuru kararı ise yalnızca
+            // süperadmininki.
+            var acikTalepler = await _context.SupportTickets
+                .Where(t => t.Durum == DestekDurumu.Acik)
+
+                // En ESKİ üstte: en uzun bekleyen müşteri en acil olan.
+                .OrderBy(t => t.UpdatedAt)
+                .ThenBy(t => t.Id)
+                .Select(t => new
+                {
+                    metin = t.Konu,
+                    altMetin = _context.Users
+                        .Where(u => u.Id == t.UserId)
+                        .Select(u => u.FullName)
+                        .FirstOrDefault(),
+
+                    // "3 gündür bekliyor" hesabı ekranda yapılıyor.
+                    // ⚠️ CreatedAt değil UpdatedAt: müşteri dün tekrar
+                    // yazdıysa bekleme dünden başlar.
+                    tarih = (DateTime?)t.UpdatedAt,
+
+                    tutar = (decimal?)null,
+                    link = "/destek/" + t.Id
+                })
+                .Take(8)
+                .ToListAsync();
+
+            if (acikTalepler.Count > 0)
+            {
+                uyarilar.Add(new
+                {
+                    tur = "bekleyen_destek",
+                    baslik = "Cevap bekleyen destek talebi",
+                    ozet = acikTalepler.Count + " talep cevap bekliyor",
+                    adet = acikTalepler.Count,
+
+                    // "yuksek": karşı tarafta bekleyen bir İNSAN var ve
+                    // beklemesi doğrudan memnuniyeti düşürüyor.
+                    // Kritik stokla aynı seviyede: ikisi de para
+                    // kaybettiriyor, biri satmayarak diğeri kaçırarak.
+                    oncelik = "yuksek",
+
+                    tumunuGorLink = "/destek",
+                    ogeler = acikTalepler
+                });
+            }
+
+
             // ---------- İLERİDE EKLENECEKLER ----------
-            // Aşama 7  → bekleyen admin başvuruları (sadece superadmin)
-            // Aşama 11 → cevaplanmamış destek talepleri
-            // Aşama 12 → bekleyen iade talepleri
+            // Aşama 9 → bekleyen iade talepleri
 
             return Ok(new { uyarilar = uyarilar });
         }

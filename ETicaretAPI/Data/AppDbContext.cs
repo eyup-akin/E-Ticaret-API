@@ -43,6 +43,10 @@ namespace ETicaretAPI.Data
         // ⭐ YENİ (4.9) — müşterinin telefon defteri
         public DbSet<Phone> Phones { get; set; }
 
+        // ⭐ YENİ (Aşama 8) — destek talepleri ve yazışmaları
+        public DbSet<SupportTicket> SupportTickets { get; set; }
+        public DbSet<SupportMessage> SupportMessages { get; set; }
+
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -332,6 +336,72 @@ namespace ETicaretAPI.Data
                 .WithMany()
                 .HasForeignKey(a => a.PhoneId)
                 .OnDelete(DeleteBehavior.SetNull);
+
+            // ⭐ YENİ (Aşama 8) — DESTEK TALEPLERİ
+            modelBuilder.Entity<SupportTicket>(e =>
+            {
+                // Müşterinin "taleplerim" listesi: kendi talepleri,
+                // en son hareket görenden eskiye.
+                // Kolon sırası önemli: önce eşitlik filtresi (UserId),
+                // sonra sıralama (UpdatedAt).
+                e.HasIndex(t => new { t.UserId, t.UpdatedAt });
+
+                // Admin listesi: duruma göre süz, son hareketine göre
+                // sırala. Aynı mantık, farklı eşitlik kolonu.
+                e.HasIndex(t => new { t.Durum, t.UpdatedAt });
+
+                // ⚠️ nvarchar(max) indekslenemez ve gereksiz yer
+                // kaplar; üstelik `Durum` ve `Kategori` filtrede
+                // kullanılıyor.
+                e.Property(t => t.Konu).HasMaxLength(150).IsRequired();
+                e.Property(t => t.Durum).HasMaxLength(20).IsRequired();
+                e.Property(t => t.Kategori).HasMaxLength(20).IsRequired();
+
+                // Talebi açan müşteri silinmeye kalkılırsa ENGELLE:
+                // yazışma bir kayıttır. (Review'daki desen.)
+                e.HasOne<User>()
+                 .WithMany()
+                 .HasForeignKey(t => t.UserId)
+                 .OnDelete(DeleteBehavior.Restrict);
+
+                // ⚠️ Sipariş bağlantısı gerçek FK ama NULLABLE.
+                // Restrict: sipariş silinmiyor zaten (ticari kayıt);
+                // silinmeye kalkılırsa talep onu tutuyor.
+                e.HasOne<Order>()
+                 .WithMany()
+                 .HasForeignKey(t => t.OrderId)
+                 .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            // ⭐ YENİ (Aşama 8) — DESTEK MESAJLARI
+            modelBuilder.Entity<SupportMessage>(e =>
+            {
+                // ⚠️ TABLONUN ANA SORGUSU: "şu talebin mesajları,
+                // eskiden yeniye". İndeks tam buna göre kurulu.
+                // Bu tablo hızlı büyür: her cevap bir satır.
+                e.HasIndex(m => new { m.TicketId, m.CreatedAt });
+
+                e.Property(m => m.Mesaj).HasMaxLength(2000).IsRequired();
+
+                // ⚠️ CASCADE — Review'daki ürün ilişkisiyle aynı
+                // gerekçe: mesaj talebin PARÇASI, tek başına anlamı
+                // yok. Talep bir gün silinirse mesajların ortada
+                // kalması sahipsiz satır üretirdi (4.8'de ürün
+                // silmenin açtığı hasarın aynısı).
+                e.HasOne<SupportTicket>()
+                 .WithMany()
+                 .HasForeignKey(m => m.TicketId)
+                 .OnDelete(DeleteBehavior.Cascade);
+
+                // ⚠️ Gönderen için Restrict: kullanıcı silinse bile
+                // yazışma durmalı. Ayrıca EF iki Restrict olmayan yol
+                // (Users → Ticket → Message ve Users → Message)
+                // çakışırsa "multiple cascade paths" hatası verirdi.
+                e.HasOne<User>()
+                 .WithMany()
+                 .HasForeignKey(m => m.GonderenUserId)
+                 .OnDelete(DeleteBehavior.Restrict);
+            });
 
             // ⭐ YENİ — ADMİN BAŞVURULARI
             modelBuilder.Entity<AdminBasvuru>(e =>

@@ -71,6 +71,13 @@ builder.Services.AddScoped<ETicaretAPI.Services.RaporTarihi>();
 // ⭐ YENİ — stok hareket defteri yazıcısı
 builder.Services.AddScoped<ETicaretAPI.Services.StokDefteri>();
 
+// ⭐ YENİ (Aşama 8) — destek yazışmasını okuyan ortak servis.
+//
+// Scoped: DbContext'e bağımlı, yani onunla aynı ömre sahip olmalı.
+// Singleton yapsaydık ilk isteğin DbContext'ini sonsuza kadar
+// tutardı.
+builder.Services.AddScoped<ETicaretAPI.Services.DestekYazismasi>();
+
 // ⭐ YENİ — mağaza ayarları.
 //
 // NEDEN Singleton, Scoped DEĞİL?
@@ -279,6 +286,38 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0
             }));
 
+
+
+    // ⭐ YENİ (Aşama 8) — "destek" politikası: talep açma ucu için.
+    //
+    // NEDEN GEREKLİ?
+    // Talep açmak yazma işlemi ve spam'e açık: bir betik dakikada
+    // yüzlerce talep açıp hem veritabanını hem admin ekranını
+    // kullanılamaz hale getirebilir. "Rate limit sadece giriş için
+    // değildir."
+    //
+    // ⚠️ SAYAÇ KULLANICIYA GÖRE BÖLÜNÜYOR, IP'YE GÖRE DEĞİL.
+    // Uç [Authorize] altında, yani kimliği BİLİYORUZ. IP'ye göre
+    // saysaydık aynı ofisten/kafeden çıkan herkes tek IP görünür ve
+    // biri kotayı doldurunca masum olanlar da cezalanırdı.
+    // "Sayacı en dar kimliğe göre böl."
+    //
+    // 10/saat: gerçek bir müşteri günde bir-iki talep açar; on tanesi
+    // fazlasıyla geniş. Yazışma (mesaj ekleme) bu limite GİRMİYOR —
+    // sınırlanan yeni talep açmak, konuşmak değil. Konuşmayı
+    // kısıtlamak, sorunu çözmeye çalışan müşteriyi cezalandırırdı.
+    options.AddPolicy("destek", httpContext =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.User.FindFirst(
+                              System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                          ?? httpContext.Connection.RemoteIpAddress?.ToString()
+                          ?? "bilinmeyen",
+            factory: _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromHours(1),
+                QueueLimit = 0
+            }));
 
 
     // ⭐ YENİ — "basvuru" politikası: admin başvuru ucu için.

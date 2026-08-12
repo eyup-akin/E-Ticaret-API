@@ -35,6 +35,15 @@ namespace ETicaretAPI.Controllers
         private readonly MagazaAyarlari _ayarlar;
 
 
+        // ⭐ YENİ (7.4) — ana sayfada bölüm başına ürün sayısı.
+        //
+        // ⚠️ Beş bölümün beşi de aynı sayıyı kullanıyor; elle beş kez
+        // 10 yazsaydık biri değiştiğinde diğerleri sessizce eski
+        // kalırdı. Sayı 10: yatay şeritte kaydırmadan 2-3 kart
+        // görünüyor, tamamı birkaç hamlede geziliyor. Daha fazlası
+        // müşterinin hiç görmeyeceği ürünü indirmek olurdu.
+        private const int BolumUrunSayisi = 10;
+
         // Resim yükleme kuralları — tek yerde dursun
         private const long MaxDosyaBoyutu = 5 * 1024 * 1024; // 5 MB
         private static readonly string[] IzinliUzantilar = { ".jpg", ".jpeg", ".png", ".webp" };
@@ -687,36 +696,7 @@ namespace ETicaretAPI.Controllers
 
             query = SiralamayiUygula(query, siralama);
 
-            // ⭐ YENİ (B4) — kategori adı.
-            //
-            // ⚠️ Product'ta gezinme özelliği (navigation property) YOK,
-            // o yüzden Include yerine ELLE BİRLEŞTİRME yapıyoruz:
-            // alt sorgu ile adı seçiyoruz. EF bunu tek SQL'e çeviriyor
-            // (LEFT JOIN), yani N+1 sorgu doğmuyor.
-            //
-            // ⚠️ Kategori silinmişse alt sorgu null döner ve alan null
-            // kalır — ekran etiketi hiç çizmiyor. Boş string yazsaydık
-            // "adı olmayan bir kategorisi var" gibi okunurdu.
-            var products = await query
-                .Select(p => new ProductDto
-                {
-                    Id = p.Id,
-                    Name = p.Name,
-                    Price = p.Price,
-                    Stock = p.Stock,
-                    CategoryId = p.CategoryId,
-                    CategoryName = _context.Categories
-                        .Where(k => k.Id == p.CategoryId)
-                        .Select(k => k.Name)
-                        .FirstOrDefault(),
-                    Barcode = p.Barcode,
-                    Cost = p.Cost,
-                    IsActive = p.IsActive,      // ⭐ YENİ
-                    VatRate = p.VatRate,        // ⭐ YENİ
-                    EskiFiyat = p.EskiFiyat,    // ⭐ YENİ (B1)
-                    ArsivlendiMi = p.ArsivlendiMi   // ⭐ YENİ (4.8)
-                })
-                .ToListAsync();
+            var products = await UrunDtosunaCevir(query).ToListAsync();
 
             // Maliyet hassas bilgi: admin değilse hepsini null'a çek.
             // Böylece müşteriye/misafire maliyet GİTMEZ.
@@ -743,6 +723,54 @@ namespace ETicaretAPI.Controllers
             }
 
             return Ok(products);
+        }
+
+
+        // ⭐ YENİ (7.1) — ÜRÜN → DTO PROJEKSİYONU, TEK YERDE
+        //
+        // ⚠️ NEDEN AYRI METOT? Bu projeksiyon `GetProducts` içine
+        // gömülüydü. Ana sayfa ucu (`GetAnaSayfa`) ikinci tüketici
+        // oldu; kopyalasaydık yarın DTO'ya yeni bir alan eklendiğinde
+        // biri güncellenir, diğeri sessizce eksik veri döndürürdü —
+        // ve fark ancak "ana sayfada indirim rozeti çıkmıyor" gibi bir
+        // şikâyetle anlaşılırdı.
+        //
+        // ⚠️ IQueryable döndürüyor, List değil: sorgu henüz
+        // veritabanına gitmedi. Çağıran sıralama/limit ekleyebiliyor
+        // ve hepsi tek SQL'e derleniyor. (`UrunSorgusuKur` ile aynı
+        // desen.)
+        //
+        // ⚠️ Kategori adı için ELLE BİRLEŞTİRME (alt sorgu): Product'ta
+        // gezinme özelliği yok, Include kullanılamıyor. EF bunu tek
+        // SQL'e çeviriyor (LEFT JOIN), N+1 doğmuyor.
+        //
+        // ⚠️ Kategori silinmişse alt sorgu null döner ve alan null
+        // kalır — ekran etiketi hiç çizmiyor. Boş string yazsaydık
+        // "adı olmayan bir kategorisi var" gibi okunurdu.
+        //
+        // ⚠️ `Cost` BURADA DOLDURULUYOR ama müşteriye gitmiyor:
+        // çağıran taraf admin değilse null'a çekiyor. Projeksiyondan
+        // hiç almasaydık admin listesi maliyeti gösteremezdi.
+        private IQueryable<ProductDto> UrunDtosunaCevir(IQueryable<Product> query)
+        {
+            return query.Select(p => new ProductDto
+            {
+                Id = p.Id,
+                Name = p.Name,
+                Price = p.Price,
+                Stock = p.Stock,
+                CategoryId = p.CategoryId,
+                CategoryName = _context.Categories
+                    .Where(k => k.Id == p.CategoryId)
+                    .Select(k => k.Name)
+                    .FirstOrDefault(),
+                Barcode = p.Barcode,
+                Cost = p.Cost,
+                IsActive = p.IsActive,
+                VatRate = p.VatRate,
+                EskiFiyat = p.EskiFiyat,        // B1
+                ArsivlendiMi = p.ArsivlendiMi   // 4.8
+            });
         }
 
 
@@ -804,9 +832,12 @@ namespace ETicaretAPI.Controllers
                     // satan" olabilirdi. Aynı kural ReportsController'da
                     // ciro hesabında da var; oradaki yardımcı tarih
                     // aralığına bağlı olduğu için buradan çağrılamıyor.
-                    // "iptal" metni artık üçüncü dosyada geçiyor —
-                    // durum sabitlerinin ortak bir yere toplanması
-                    // Aşama 11 teknik borç listesine yazıldı.
+                    // ⭐ DEĞİŞTİ (7.1) — durum artık elle yazılmıyor.
+                    // `"iptal"` metni üç dosyada elle yazılıydı ve ana
+                    // sayfa bölümleri dördüncü/beşinci tüketici olunca
+                    // `SiparisDurumlari` sabit sınıfına toplandı.
+                    // Adı bir gün değişirse derleme hata verecek;
+                    // eskiden sessizce yanlış sayardı.
                     //
                     // ⚠️ Adet toplanıyor, sipariş SAYISI değil: 1 kişinin
                     // 50 adet alması ile 50 kişinin 1'er adet alması
@@ -817,7 +848,7 @@ namespace ETicaretAPI.Controllers
                         .OrderByDescending(p => _context.OrderItems
                             .Where(oi => oi.ProductId == p.Id
                                       && _context.Orders.Any(o => o.Id == oi.OrderId
-                                                               && o.Status != "iptal"))
+                                                               && o.Status != SiparisDurumlari.Iptal))
                             .Sum(oi => (int?)oi.Quantity) ?? 0)
                         .ThenBy(p => p.Id);
 
@@ -931,6 +962,227 @@ namespace ETicaretAPI.Controllers
                 enDusuk = sinirlar?.EnDusuk ?? 0m,
                 enYuksek = sinirlar?.EnYuksek ?? 0m
             });
+        }
+
+
+        // ⭐ YENİ (7.1 + 7.3 + 7.4) — 🟢 GET /api/products/anasayfa
+        //
+        //   ?gezilenIdler=12,5,9   (isteğe bağlı, en son bakılan başta)
+        //
+        // Mobil vitrinin bölümlerini TEK istekte döndürür.
+        //
+        // ⚠️ NEDEN TEK UÇ, NEDEN BÖLÜM BAŞINA BİR UÇ DEĞİL?
+        // Beş bölüm = beş HTTP isteği demekti: mobil ağda beş ayrı
+        // gidiş-dönüş, beşi ayrı zamanda dönünce ekranın parça parça
+        // dolması ve bölümler arasında tutarsız bir an (biri eski,
+        // biri yeni veriyle). Yol haritası 7.4'ün kuralı bu.
+        //
+        // ⚠️ BOŞ BÖLÜM CEVABA HİÇ GİRMİYOR. "Boş bölüm çizilmesin"
+        // kuralı burada, tek yerde uygulanıyor. Her istemciye ayrı
+        // `length > 0` kontrolü bıraksaydık biri unutur ve ekranda
+        // başlığı olan, içi boş bir şerit kalırdı.
+        //
+        // ⚠️ BÖLÜM SIRASI VE BAŞLIĞI SUNUCUDAN GİDİYOR. Küratörlük
+        // kararı ("hangi bölüm önce") tek yerde dursun ki yarın sıra
+        // değişince uygulama güncellemesi gerekmesin.
+        //
+        // ⚠️ HER ZAMAN MÜŞTERİ DALI (`adminMi: false`). Ana sayfa bir
+        // VİTRİN; admin bu ucu çağırsa bile pasif/arşivli ürün ya da
+        // maliyet görmemeli. Rolü okumak, gizlemeyi role bağlamak
+        // olurdu ve gizleme sebebi rol değil, ekranın ne olduğu.
+        //
+        // ⚠️ GEZME GEÇMİŞİ SUNUCUDA SAKLANMIYOR — sadece bu isteğin
+        // süresince kullanılıyor (yol haritası 7.2 kararı). Misafirde
+        // de çalışıyor: uç kimlik istemiyor.
+        [HttpGet("anasayfa")]
+        public async Task<IActionResult> GetAnaSayfa([FromQuery] string? gezilenIdler = null)
+        {
+            // Bozuk parçalar sessizce atılıyor, üst sınır zaten metotta.
+            var gezilen = IdListesiAyristir(gezilenIdler);
+
+            // Görünürlük kilidi TEK YERDE: bütün bölümler bu sorgunun
+            // üstüne kuruluyor, yani hiçbiri pasif ya da arşivli ürün
+            // gösteremez. Filtreler boş — ana sayfada filtre yok.
+            var gorunur = UrunSorgusuKur(
+                adminMi: false,
+                categoryId: null, search: null, aktif: null, arsiv: false,
+                minFiyat: null, maxFiyat: null, kategoriler: null,
+                minPuan: null, sadeceStokta: false);
+
+            // ---- 1) ŞU AN REVAÇTA — son 7 günün satışı ----
+            //
+            // ⚠️ ZAMAN PENCERESİ ŞART. Penceresiz olsaydı bu bölüm
+            // "en çok satan"ın kopyası olurdu; iki bölüm de birbirini
+            // değersizleştirirdi. "Tüm zamanların en çok satanı" ile
+            // "bu haftanın yükselişi" farklı sorulardır.
+            //
+            // ⚠️ Görünürlük süzgeci sorgunun İÇİNDE (`gorunur.Any`):
+            // EF bunu EXISTS'e çeviriyor, yani tüm ürün id'lerini
+            // belleğe çekmeden filtreliyor.
+            var esikTarihi = DateTime.UtcNow.AddDays(-7);
+
+            var revactaIdler = await _context.OrderItems
+                .Where(oi => gorunur.Any(p => p.Id == oi.ProductId))
+                .Where(oi => _context.Orders.Any(o => o.Id == oi.OrderId
+                                                   && o.Status != SiparisDurumlari.Iptal
+                                                   && o.CreatedAt >= esikTarihi))
+                .GroupBy(oi => oi.ProductId)
+                .OrderByDescending(g => g.Sum(x => x.Quantity))
+                .ThenBy(g => g.Key)     // eşitlikte kararlı sıra
+                .Select(g => g.Key)
+                .Take(BolumUrunSayisi)
+                .ToListAsync();
+
+            // ---- 2) EN ÇOK FAVORİLENEN ----
+            //
+            // ⚠️ Favori bir NİYET kaydı, satış değil: "almadım ama
+            // gözüm üstünde". Satışla aynı şeyi ölçmediği için ayrı
+            // bir bölüm olmayı hak ediyor.
+            var favoriIdler = await _context.Favorites
+                .Where(f => gorunur.Any(p => p.Id == f.ProductId))
+                .GroupBy(f => f.ProductId)
+                .OrderByDescending(g => g.Count())
+                .ThenBy(g => g.Key)
+                .Select(g => g.Key)
+                .Take(BolumUrunSayisi)
+                .ToListAsync();
+
+            // ---- 3) YENİ GELENLER ----
+            //
+            // ⚠️ `Id`'YE GÖRE — ve bu bir eksiklik değil, karar.
+            // `Id` bir identity sütunu, artan sırada dağıtılıyor;
+            // "en son eklenen 10 ürün" sorusunun cevabı Id
+            // karşılaştırmasında tam doğru. Bir `CreatedAt` kolonu
+            // ancak "son 30 günde eklenenler" gibi bir EŞİK
+            // gerektiğinde şart olur. Bugün eklemek, mevcut 52 ürünün
+            // tarihini UYDURMAK zorunda bırakırdı.
+            var yeniIdler = await gorunur
+                .OrderByDescending(p => p.Id)
+                .Take(BolumUrunSayisi)
+                .Select(p => p.Id)
+                .ToListAsync();
+
+            // ---- 4) SON GEZDİKLERİN ----
+            //
+            // ⚠️ SIRA PARAMETREDEN GELİYOR, VERİTABANINDAN DEĞİL.
+            // "En son bakılan başta" bilgisi yalnızca cihazdaki
+            // listede var; SQL onu bilemez. Görünmez olanları
+            // (silinmiş, pasifleşmiş) eleyip kalanları istekteki
+            // sırayla diziyoruz.
+            var gorunurGezilen = await gorunur
+                .Where(p => gezilen.Contains(p.Id))
+                .Select(p => p.Id)
+                .ToListAsync();
+
+            var sonGezilenIdler = gezilen
+                .Where(id => gorunurGezilen.Contains(id))
+                .Take(BolumUrunSayisi)
+                .ToList();
+
+            // ---- 5) SANA ÖZEL ----
+            //
+            // ⚠️ ÖNERİ MOTORU YOK VE UYDURULMUYOR. Mantık tek cümleyle
+            // anlatılabilir olmalı çünkü ekranda da öyle yazıyor
+            // ("son baktıklarına benzeyen"): gezilen ürünlerin
+            // KATEGORİLERİNDEN, henüz bakılmamış, popüler ürünler.
+            //
+            // ⚠️ Gezilenlerin KENDİSİ dışarıda: müşteri onları bir
+            // üstteki şeritte zaten görüyor.
+            var ilgiliKategoriler = await gorunur
+                .Where(p => sonGezilenIdler.Contains(p.Id))
+                .Select(p => p.CategoryId)
+                .Distinct()
+                .ToListAsync();
+
+            var sanaOzelIdler = ilgiliKategoriler.Count == 0
+                ? new List<int>()
+                : await gorunur
+                    .Where(p => ilgiliKategoriler.Contains(p.CategoryId)
+                             && !gezilen.Contains(p.Id))
+                    // Popülerlik: `SiralamayiUygula("populer")` ile
+                    // aynı ölçü — iptal edilen siparişler sayılmıyor.
+                    .OrderByDescending(p => _context.OrderItems
+                        .Where(oi => oi.ProductId == p.Id
+                                  && _context.Orders.Any(o => o.Id == oi.OrderId
+                                                           && o.Status != SiparisDurumlari.Iptal))
+                        .Sum(oi => (int?)oi.Quantity) ?? 0)
+                    .ThenByDescending(p => p.Id)
+                    .Take(BolumUrunSayisi)
+                    .Select(p => p.Id)
+                    .ToListAsync();
+
+            // ---- ÜRÜNLERİ TEK SEFERDE ÇEK ----
+            //
+            // ⚠️ N+1'İN BÖLÜM SÜRÜMÜ. Her bölüm kendi ürünlerini ayrı
+            // çekip ayrı doldursaydı resim ve puan sorguları BEŞ KEZ
+            // çalışırdı — üstelik aynı ürün birden çok bölümde
+            // olduğu için işin çoğu tekrar olurdu. Yukarıdaki
+            // sorgular yalnızca ID topladı; ürünün kendisi, resmi ve
+            // puanı bir kez geliyor.
+            var tumIdler = revactaIdler
+                .Concat(favoriIdler)
+                .Concat(yeniIdler)
+                .Concat(sonGezilenIdler)
+                .Concat(sanaOzelIdler)
+                .Distinct()
+                .ToList();
+
+            if (tumIdler.Count == 0)
+            {
+                // Katalog bomboş: uydurma bir bölüm listesi değil,
+                // dürüst bir boş liste. İstemci ızgarayı yine çiziyor.
+                return Ok(new { bolumler = Array.Empty<object>() });
+            }
+
+            var urunler = await UrunDtosunaCevir(
+                    gorunur.Where(p => tumIdler.Contains(p.Id)))
+                .ToListAsync();
+
+            // ⚠️ MALİYET MÜŞTERİYE GİTMEZ — ProductDto'daki desenin
+            // aynısı. Bu uç her zaman müşteri dalında çalışıyor.
+            foreach (var u in urunler)
+            {
+                u.Cost = null;
+            }
+
+            // Ham stok da gitmiyor; yerine `stokDurumu` + `kalanAdet`.
+            StokBilgisiniDoldur(urunler, adminMi: false);
+
+            await ResimleriDoldur(urunler);
+            await PuanlariDoldur(urunler);
+
+            var sozluk = urunler.ToDictionary(u => u.Id);
+
+            // ---- BÖLÜMLERİ KUR ----
+            var bolumler = new List<object>();
+
+            void BolumEkle(string anahtar, string baslik, List<int> idler)
+            {
+                var liste = idler
+                    .Where(sozluk.ContainsKey)
+                    .Select(id => sozluk[id])
+                    .ToList();
+
+                // Boş bölüm cevaba hiç girmiyor.
+                if (liste.Count == 0)
+                {
+                    return;
+                }
+
+                bolumler.Add(new { anahtar, baslik, urunler = liste });
+            }
+
+            // ⚠️ SIRA BİLİNÇLİ: önce mağazanın canlı nabzı (revaçta),
+            // sonra müşterinin kendi izi (son gezdikleri ve ondan
+            // türeyen öneri — ikisi yan yana durmalı, biri diğerinin
+            // sebebi), sonra genel keşif (favori, yeni).
+            BolumEkle("revacta", "Şu an revaçta", revactaIdler);
+            BolumEkle("son_gezilen", "Son gezdiğin ürünler", sonGezilenIdler);
+            BolumEkle("sana_ozel", "Sana özel", sanaOzelIdler);
+            BolumEkle("favori", "En çok favorilenen", favoriIdler);
+            BolumEkle("yeni", "Yeni gelenler", yeniIdler);
+
+            return Ok(new { bolumler });
         }
 
 

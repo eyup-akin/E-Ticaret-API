@@ -5,6 +5,7 @@ using System.Security.Claims;
 using ETicaretAPI.Data;
 using ETicaretAPI.Models;
 using ETicaretAPI.DTOs;
+using ETicaretAPI.Services;   // ⭐ YENİ (7.1) — SiparisDurumlari
 
 namespace ETicaretAPI.Controllers
 {
@@ -196,7 +197,7 @@ namespace ETicaretAPI.Controllers
         private async Task<bool> TeslimAlindiMi(int userId, int productId)
         {
             return await _context.Orders
-                .Where(o => o.UserId == userId && o.Status == "teslim_edildi")
+                .Where(o => o.UserId == userId && o.Status == SiparisDurumlari.TeslimEdildi)
                 .Join(_context.OrderItems,
                       o => o.Id,
                       oi => oi.OrderId,

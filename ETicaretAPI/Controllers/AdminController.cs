@@ -688,7 +688,7 @@ namespace ETicaretAPI.Controllers
             var esikTarihi = simdi.AddDays(-gunEsigi);
 
             var bekleyenler = await _context.Orders
-                .Where(o => o.Status == "hazirlaniyor" && o.CreatedAt < esikTarihi)
+                .Where(o => o.Status == SiparisDurumlari.Hazirlaniyor && o.CreatedAt < esikTarihi)
                 .OrderBy(o => o.CreatedAt)            // en eski = en acil, üstte
                 .Join(_context.Users,
                       o => o.UserId,

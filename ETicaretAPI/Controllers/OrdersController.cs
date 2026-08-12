@@ -833,7 +833,7 @@ namespace ETicaretAPI.Controllers
                     UserId = userId,
                     AddressId = dto.AddressId,
                     Total = toplamTutar,
-                    Status = "hazirlaniyor",
+                    Status = SiparisDurumlari.Hazirlaniyor,
                     PaymentStatus = "odendi",           // ödeme simüle: başarılı
                     CardLast4 = kart.Last4Digits,       // kullanılan kartı dondur
 
@@ -1120,10 +1120,10 @@ namespace ETicaretAPI.Controllers
 
             return Ok(new
             {
-                hazirlaniyor = Al("hazirlaniyor"),
-                kargoda = Al("kargoda"),
-                teslimEdildi = Al("teslim_edildi"),
-                iptal = Al("iptal"),
+                hazirlaniyor = Al(SiparisDurumlari.Hazirlaniyor),
+                kargoda = Al(SiparisDurumlari.Kargoda),
+                teslimEdildi = Al(SiparisDurumlari.TeslimEdildi),
+                iptal = Al(SiparisDurumlari.Iptal),
 
                 // Toplamı da gönderiyoruz — istemci dördünü toplayabilir
                 // ama o toplam, ileride yeni bir durum eklendiğinde
@@ -1390,7 +1390,7 @@ namespace ETicaretAPI.Controllers
                 }
 
                 // 3) Siparişi iptal et + sebebi kaydet
-                order.Status = "iptal";
+                order.Status = SiparisDurumlari.Iptal;
                 order.PaymentStatus = "iade_edildi";
                 order.CancelReason = dto.Reason.Trim();
                 order.CancelledAt = DateTime.UtcNow;
@@ -1412,7 +1412,7 @@ namespace ETicaretAPI.Controllers
                     _sablonlar.SiparisIptalEdildi(order, order.CancelReason),
                     "SiparisIptal:Musteri");
 
-                return Ok(new { mesaj = "Siparişin iptal edildi ve ödemen iade edildi.", durum = "iptal" });
+                return Ok(new { mesaj = "Siparişin iptal edildi ve ödemen iade edildi.", durum = SiparisDurumlari.Iptal });
             }
             catch
             {
@@ -1515,17 +1515,17 @@ namespace ETicaretAPI.Controllers
         private static readonly Dictionary<string, string[]> GecerliGecisler =
             new Dictionary<string, string[]>
             {
-                ["hazirlaniyor"] = new[] { "kargoda" },
-                ["kargoda"] = new[] { "teslim_edildi" },
-                ["teslim_edildi"] = Array.Empty<string>(),  // son durum
-                ["iptal"] = Array.Empty<string>()   // son durum
+                [SiparisDurumlari.Hazirlaniyor] = new[] { SiparisDurumlari.Kargoda },
+                [SiparisDurumlari.Kargoda] = new[] { SiparisDurumlari.TeslimEdildi },
+                [SiparisDurumlari.TeslimEdildi] = Array.Empty<string>(),  // son durum
+                [SiparisDurumlari.Iptal] = Array.Empty<string>()   // son durum
             };
 
         // İptal, yalnızca bu durumlardayken yapılabilir
         private static readonly string[] IptalEdilebilirDurumlar =
         {
-            "hazirlaniyor",
-            "kargoda"
+            SiparisDurumlari.Hazirlaniyor,
+            SiparisDurumlari.Kargoda
         };
 
         // 🔴 GET /api/admin/orders?search=&status=&paymentStatus=&page=1&pageSize=10
@@ -2025,7 +2025,7 @@ namespace ETicaretAPI.Controllers
             //   uyarısı alır, numarayı girer, sonra "bu geçiş yapılamaz"
             //   duvarına toslardı. Kullanıcıyı boşuna uğraştırmak.
             // ============================================================
-            if (yeniDurum == "kargoda")
+            if (yeniDurum == SiparisDurumlari.Kargoda)
             {
                 // Trim: admin yapıştırırken başa/sona boşluk gelmesi çok yaygın.
                 // Boşluklu takip numarası kargo firmasının sitesinde bulunamaz.
@@ -2096,7 +2096,7 @@ namespace ETicaretAPI.Controllers
                 order.ShippedAt = DateTime.UtcNow;
             }
 
-            if (yeniDurum == "teslim_edildi")
+            if (yeniDurum == SiparisDurumlari.TeslimEdildi)
             {
                 order.DeliveredAt = DateTime.UtcNow;
             }
@@ -2119,14 +2119,14 @@ namespace ETicaretAPI.Controllers
             // "hazirlaniyor" için bildirim YOK: sipariş zaten o durumda
             // oluşuyor ve "Sipariş Alındı" maili gönderilmiş oluyor.
             // İkinci bir mail gürültü olurdu.
-            if (yeniDurum == "kargoda" || yeniDurum == "teslim_edildi")
+            if (yeniDurum == SiparisDurumlari.Kargoda || yeniDurum == SiparisDurumlari.TeslimEdildi)
             {
                 var aliciEmail = await MusteriEmailiGetirAsync(order.UserId);
 
                 // Şablon seçimi burada; gönderim tek satır.
                 // İki ayrı GuvenliGonderAsync çağrısı yazmak yerine
                 // sadece İÇERİĞİ dallandırıyoruz — değişen tek şey o.
-                var icerik = yeniDurum == "kargoda"
+                var icerik = yeniDurum == SiparisDurumlari.Kargoda
                     ? _sablonlar.KargoyaVerildi(order)
                     : _sablonlar.TeslimEdildi(order);
 
@@ -2247,7 +2247,7 @@ namespace ETicaretAPI.Controllers
                 }
 
                 // 3) SİPARİŞİ İPTAL ET + SEBEBİ KAYDET
-                order.Status = "iptal";
+                order.Status = SiparisDurumlari.Iptal;
                 order.PaymentStatus = "iade_edildi";
                 order.CancelReason = dto.Reason.Trim();
                 order.CancelledAt = DateTime.UtcNow;
@@ -2276,7 +2276,7 @@ namespace ETicaretAPI.Controllers
                 return Ok(new
                 {
                     mesaj = "Sipariş iptal edildi, stok iade edildi ve ödeme geri alındı.",
-                    durum = "iptal"
+                    durum = SiparisDurumlari.Iptal
                 });
             }
             catch

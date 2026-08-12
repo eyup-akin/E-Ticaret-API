@@ -72,7 +72,7 @@ namespace ETicaretAPI.Controllers
         private IQueryable<Models.Order> GecerliSiparisler(RaporAraligi aralik)
         {
             return _context.Orders
-                .Where(o => o.Status != "iptal"
+                .Where(o => o.Status != SiparisDurumlari.Iptal
                          && o.CreatedAt >= aralik.BaslangicUtc
                          && o.CreatedAt < aralik.BitisUtcHaric);
         }
@@ -567,7 +567,7 @@ namespace ETicaretAPI.Controllers
             // yerine sipariş tarihine düşürüyoruz. EF bunu SQL'de
             // ISNULL(CancelledAt, CreatedAt) haline getiriyor.
             var iptaller = await _context.Orders
-                .Where(o => o.Status == "iptal"
+                .Where(o => o.Status == SiparisDurumlari.Iptal
                          && (o.CancelledAt ?? o.CreatedAt) >= aralik.BaslangicUtc
                          && (o.CancelledAt ?? o.CreatedAt) < aralik.BitisUtcHaric)
                 .OrderByDescending(o => o.CancelledAt ?? o.CreatedAt)

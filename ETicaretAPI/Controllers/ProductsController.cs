@@ -34,6 +34,9 @@ namespace ETicaretAPI.Controllers
         // burada elle 5 yazsaydık dördüncü bir kopya olurdu.
         private readonly MagazaAyarlari _ayarlar;
 
+        // ⭐ YENİ — kombin ve "birlikte alınanlar" önerileri
+        private readonly KombinServisi _kombin;
+
 
         // ⭐ YENİ (7.4) — ana sayfada bölüm başına ürün sayısı.
         //
@@ -61,13 +64,15 @@ namespace ETicaretAPI.Controllers
             IWebHostEnvironment env,
             IHttpClientFactory httpFactory,
             StokDefteri defter,              // ⭐ YENİ
-            MagazaAyarlari ayarlar)          // ⭐ YENİ (5.3)
+            MagazaAyarlari ayarlar,
+            KombinServisi kombin)            // ⭐ YENİ
         {
             _context = context;
             _env = env;
             _httpFactory = httpFactory;
             _defter = defter;                // ⭐ YENİ
             _ayarlar = ayarlar;              // ⭐ YENİ
+            _kombin = kombin;                // ⭐ YENİ
         }
 
 
@@ -969,6 +974,105 @@ namespace ETicaretAPI.Controllers
                 enDusuk = sinirlar?.EnDusuk ?? 0m,
                 enYuksek = sinirlar?.EnYuksek ?? 0m
             });
+        }
+
+
+        // ⭐ YENİ — 🟢 GET /api/products/5/benzer
+        //
+        // Aynı kategorideki diğer ürünler, popülerlik sırasında.
+        [HttpGet("{id}/benzer")]
+        public async Task<IActionResult> Benzer(int id, [FromQuery] int adet = 10)
+        {
+            if (adet < 1 || adet > 20) adet = 10;
+
+            var kategoriId = await _context.Products
+                .Where(p => p.Id == id)
+                .Select(p => (int?)p.CategoryId)
+                .FirstOrDefaultAsync();
+
+            if (kategoriId == null)
+            {
+                return NotFound(new { mesaj = "Ürün bulunamadı!" });
+            }
+
+            var gorunur = UrunSorgusuKur(
+                adminMi: false,
+                categoryId: null, search: null, aktif: null, arsiv: false,
+                minFiyat: null, maxFiyat: null, kategoriler: null,
+                minPuan: null, sadeceStokta: false);
+
+            var idler = await gorunur
+                .Where(p => p.CategoryId == kategoriId && p.Id != id)
+                .OrderByDescending(p => _context.OrderItems
+                    .Where(oi => oi.ProductId == p.Id
+                              && _context.Orders.Any(o => o.Id == oi.OrderId
+                                                       && o.Status != SiparisDurumlari.Iptal))
+                    .Sum(oi => (int?)oi.Quantity) ?? 0)
+                .ThenByDescending(p => p.Id)
+                .Take(adet)
+                .Select(p => p.Id)
+                .ToListAsync();
+
+            return Ok(await UrunListesiGetirAsync(idler));
+        }
+
+
+        // ⭐ YENİ — 🟢 GET /api/products/5/birlikte-alinanlar
+        //
+        // Aynı siparişte geçen ürünler. ⚠️ İndirim yok, sadece öneri.
+        [HttpGet("{id}/birlikte-alinanlar")]
+        public async Task<IActionResult> BirlikteAlinanlar(int id, [FromQuery] int adet = 10)
+        {
+            if (adet < 1 || adet > 20) adet = 10;
+
+            var idler = await _kombin.BirlikteAlinanIdlerAsync(id, adet);
+
+            return Ok(await UrunListesiGetirAsync(idler));
+        }
+
+
+        // ⭐ YENİ — 🟢 GET /api/products/5/kombinler
+        //
+        // Admin tanımlı kombinler; indirimleri gerçek ve sepette de
+        // uygulanıyor.
+        [HttpGet("{id}/kombinler")]
+        public async Task<IActionResult> Kombinler(int id)
+        {
+            return Ok(await _kombin.UrunKombinleriAsync(id));
+        }
+
+
+        // Verilen id'ler için tam ProductDto listesi — sırayı koruyarak.
+        private async Task<List<ProductDto>> UrunListesiGetirAsync(List<int> idler)
+        {
+            if (idler.Count == 0)
+            {
+                return new List<ProductDto>();
+            }
+
+            var gorunur = UrunSorgusuKur(
+                adminMi: false,
+                categoryId: null, search: null, aktif: null, arsiv: false,
+                minFiyat: null, maxFiyat: null, kategoriler: null,
+                minPuan: null, sadeceStokta: false);
+
+            var urunler = await UrunDtosunaCevir(gorunur.Where(p => idler.Contains(p.Id)))
+                .ToListAsync();
+
+            foreach (var u in urunler)
+            {
+                u.Cost = null;
+            }
+
+            StokBilgisiniDoldur(urunler, adminMi: false);
+            await ResimleriDoldur(urunler);
+            await PuanlariDoldur(urunler);
+
+            return idler
+                .Select(x => urunler.FirstOrDefault(u => u.Id == x))
+                .Where(u => u != null)
+                .Select(u => u!)
+                .ToList();
         }
 
 

@@ -29,14 +29,20 @@ namespace ETicaretAPI.Controllers
         // ayrışabilir ve müşteri sepette gördüğü tutarı ödemez.
         private readonly ETicaretAPI.Services.SepetHesaplayici _hesaplayici;
 
+        // ⭐ YENİ — kombin indirimi: sepette bir kombinin TÜM ürünleri
+        // varsa indirim otomatik uygulanıyor.
+        private readonly ETicaretAPI.Services.KombinServisi _kombin;
+
         public CartController(
             AppDbContext context,
             ETicaretAPI.Services.MagazaAyarlari ayarlar,
-            ETicaretAPI.Services.SepetHesaplayici hesaplayici)   // ⭐ YENİ
+            ETicaretAPI.Services.SepetHesaplayici hesaplayici,   // ⭐ YENİ
+            ETicaretAPI.Services.KombinServisi kombin)           // ⭐ YENİ
         {
             _context = context;
             _ayarlar = ayarlar;
             _hesaplayici = hesaplayici;                          // ⭐ YENİ
+            _kombin = kombin;
         }
 
         // Token'dan giriş yapmış kullanıcının id'sini okur
@@ -96,7 +102,13 @@ namespace ETicaretAPI.Controllers
             // cevabı kullanacak, kendi hesap yapmayacak.
             var araToplam = cart.Sum(k => k.ProductPrice * k.Quantity);
 
-            var ozet = _hesaplayici.Hesapla(araToplam, 0);
+            // ⭐ YENİ — kombin indirimi (kupondan AYRI).
+            // Kupon sipariş onayında giriliyor; kombin indirimi ise
+            // sepetin içeriğinden doğuyor, burada görünmeli.
+            var kombinIndirimi = await _kombin.SepetIndirimiAsync(
+                cart.Select(k => k.ProductId).Distinct().ToList());
+
+            var ozet = _hesaplayici.Hesapla(araToplam, kombinIndirimi);
 
             // ⭐ DEĞİŞTİ — CEVAP ARTIK DÜZ DİZİ DEĞİL, NESNE.
             //
@@ -133,6 +145,11 @@ namespace ETicaretAPI.Controllers
                 ozet = new
                 {
                     araToplam = ozet.AraToplam,
+
+                    // ⚠️ Ayrı satır: müşteri indirimin nereden
+                    // geldiğini görmeli.
+                    kombinIndirimi = kombinIndirimi,
+
                     kargoUcreti = ozet.KargoUcreti,
                     toplam = ozet.Toplam,
                     ucretsizKargoyaKalan = ozet.UcretsizKargoyaKalan,

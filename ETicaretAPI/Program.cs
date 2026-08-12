@@ -87,6 +87,9 @@ builder.Services.AddSingleton<ETicaretAPI.Services.IadeHesaplayici>();
 // ⭐ YENİ (Aşama 10) — sözleşme onaylarını yazan servis (DbContext'e bağlı).
 builder.Services.AddScoped<ETicaretAPI.Services.SozlesmeOnayServisi>();
 
+// ⭐ YENİ — kombin önerileri ve kombin indirimi (DbContext'e bağlı).
+builder.Services.AddScoped<ETicaretAPI.Services.KombinServisi>();
+
 // ⭐ YENİ — mağaza ayarları.
 //
 // NEDEN Singleton, Scoped DEĞİL?

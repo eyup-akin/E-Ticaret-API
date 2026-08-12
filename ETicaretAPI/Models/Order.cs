@@ -35,6 +35,11 @@
         // Uygulanan indirim tutarı. 0 = indirim yok.
         public decimal DiscountAmount { get; set; }
 
+        // ⭐ YENİ — kombin indirimi, kupon indiriminden AYRI dondurulur.
+        // DiscountAmount'a eklemek o alanın anlamını ("kupon indirimi")
+        // sessizce değiştirirdi.
+        public decimal KombinIndirimi { get; set; } = 0;
+
         // kopyalanır ve bir daha değişmez.
         // (UnitPrice ve CardLast4'te uyguladığımız mantığın aynısı.)
         public string ShippingFullName { get; set; } = string.Empty;

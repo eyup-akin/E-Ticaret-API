@@ -54,6 +54,10 @@ namespace ETicaretAPI.Data
         public DbSet<Sozlesme> Sozlesmeler { get; set; }
         public DbSet<SozlesmeOnayi> SozlesmeOnaylari { get; set; }
 
+        // ⭐ YENİ — ürün kombinleri
+        public DbSet<Kombin> Kombinler { get; set; }
+        public DbSet<KombinUrun> KombinUrunler { get; set; }
+
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -140,6 +144,11 @@ namespace ETicaretAPI.Data
 
             modelBuilder.Entity<OrderItem>()
                 .Property(oi => oi.EskiFiyat)
+                .HasPrecision(18, 2);
+
+            // ⚠️ Precision şart: varsayılan decimal(18,0) kuruşu siler.
+            modelBuilder.Entity<Order>()
+                .Property(o => o.KombinIndirimi)
                 .HasPrecision(18, 2);
 
 
@@ -407,6 +416,36 @@ namespace ETicaretAPI.Data
                 e.HasOne<User>()
                  .WithMany()
                  .HasForeignKey(m => m.GonderenUserId)
+                 .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            // ⭐ YENİ — KOMBİNLER
+            modelBuilder.Entity<Kombin>(e =>
+            {
+                e.Property(k => k.Ad).HasMaxLength(100).IsRequired();
+                e.Property(k => k.Aciklama).HasMaxLength(300);
+            });
+
+            modelBuilder.Entity<KombinUrun>(e =>
+            {
+                // ⚠️ Aynı ürün bir kombine iki kez eklenemez.
+                e.HasIndex(ku => new { ku.KombinId, ku.ProductId }).IsUnique();
+
+                // "Bu ürün hangi kombinlerde?" sorgusu.
+                e.HasIndex(ku => ku.ProductId);
+
+                // Kombin silinince kalemleri de gider: kalem tek
+                // başına anlamsız.
+                e.HasOne<Kombin>()
+                 .WithMany()
+                 .HasForeignKey(ku => ku.KombinId)
+                 .OnDelete(DeleteBehavior.Cascade);
+
+                // Ürün silinmeye kalkılırsa engelle (4.8 zaten
+                // silmeyi kapatıyor).
+                e.HasOne<Product>()
+                 .WithMany()
+                 .HasForeignKey(ku => ku.ProductId)
                  .OnDelete(DeleteBehavior.Restrict);
             });
 

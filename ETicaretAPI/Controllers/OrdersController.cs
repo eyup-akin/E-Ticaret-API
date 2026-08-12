@@ -21,6 +21,9 @@ namespace ETicaretAPI.Controllers
         // ⭐ YENİ (Aşama 10) — sözleşme onaylarını yazan ortak servis
         private readonly SozlesmeOnayServisi _onaylar;
 
+        // ⭐ YENİ — kombin indirimi
+        private readonly KombinServisi _kombin;
+
         // ⭐ YENİ — e-posta bildirimleri için üç bağımlılık
         //
         // _email     : gönderme sözleşmesi. Arkada konsol mu SMTP mi
@@ -67,6 +70,7 @@ namespace ETicaretAPI.Controllers
             SepetHesaplayici hesaplayici,                 // ⭐ YENİ (4.2)
             KdvHesaplayici kdv,                           // ⭐ YENİ (4.3)
             SozlesmeOnayServisi onaylar,                  // ⭐ YENİ (Aşama 10)
+            KombinServisi kombin,                         // ⭐ YENİ
             ILogger<OrdersController> log)                // ⭐ YENİ
         {
             _context = context;
@@ -80,6 +84,7 @@ namespace ETicaretAPI.Controllers
             _hesaplayici = hesaplayici;                   // ⭐ YENİ
             _kdv = kdv;                                   // ⭐ YENİ
             _onaylar = onaylar;                           // ⭐ YENİ
+            _kombin = kombin;                             // ⭐ YENİ
         }
 
 
@@ -830,7 +835,12 @@ namespace ETicaretAPI.Controllers
                 //   • kargo eşiğini İNDİRİMLİ tutara göre değerlendirir
                 //   • kargoyu indirimden SONRA ekler (kupon kargoya inmez)
                 //   • tüm değerleri kuruşa yuvarlar
-                var ozet = _hesaplayici.Hesapla(araToplam, indirimTutari);
+                // ⭐ YENİ — kombin indirimi. Sepette gösterilen tutarın
+                // siparişte de çıkması için aynı servis çağrılıyor.
+                var kombinIndirimi = await _kombin.SepetIndirimiAsync(
+                    sepetOgeleri.Select(k => k.ProductId).Distinct().ToList());
+
+                var ozet = _hesaplayici.Hesapla(araToplam, indirimTutari + kombinIndirimi);
 
                 // Order.Total ve Payment.Amount'ın İKİSİ de bu değerden
                 // besleniyor. Ayrı ayrı hesaplasaydık kuruş farkı çıkabilir
@@ -873,6 +883,9 @@ namespace ETicaretAPI.Controllers
                     SubTotal = araToplam,
                     CouponCode = kullanilanKod,
                     DiscountAmount = indirimTutari,
+
+                    // ⭐ YENİ — kombin indirimi ayrı donuyor.
+                    KombinIndirimi = kombinIndirimi,
 
                     // ⭐ YENİ — KARGO ÜCRETİ (dondurulmuş)
                     //

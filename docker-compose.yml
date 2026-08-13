@@ -1,0 +1,119 @@
+# ============================================================
+#  ADIM 1 — YALNIZCA VERİTABANI
+#
+#  Bu dosya şu an TEK bir şey yapıyor: SQL Server'ı bir kutunun
+#  (container) içinde çalıştırıyor. API hâlâ senin bilgisayarında
+#  `dotnet run` ile çalışacak.
+#
+#  ⚠️ NEDEN ÖNCE SADECE VERİTABANI?
+#
+#  Her şeyi birden kutulayıp "umarım çalışır" demek yerine tek
+#  parçadan başlıyoruz. Bu adım bozulursa suçlu belli: veritabanı.
+#  Çalıştığını gördükten sonra 2. adımda API'yi de ekleyeceğiz.
+#
+#  ⚠️ WINDOWS'TAKİ MEVCUT SQL SERVER'INA DOKUNMUYORUZ.
+#  O çalışmaya devam ediyor, verilerin yerinde duruyor. Bu container
+#  BOŞ ve AYRI bir veritabanı — istediğin an ikisi arasında geçiş
+#  yapabilirsin (tek satır: appsettings.Development.json).
+#
+#  ----- KULLANIM -----
+#    docker compose up -d      → başlat (arka planda)
+#    docker compose ps         → çalışıyor mu bak
+#    docker compose logs -f db → günlükleri izle (Ctrl+C ile çık)
+#    docker compose stop       → durdur (veri KALIR)
+#    docker compose down       → durdur + kutuyu sil (veri yine KALIR)
+#    docker compose down -v    → ⚠️ VERİYİ DE SİLER
+# ============================================================
+
+services:
+  # "db" bu servisin adı. Aynı zamanda ağ adresi oluyor: 2. adımda
+  # API container'ı veritabanına "db" diyerek ulaşacak.
+  db:
+    # Hazır kalıp (image). Microsoft'un resmi SQL Server 2022 imajı.
+    # İlk `up` komutunda internetten iniyor (~1,5 GB), sonra yerelde
+    # duruyor ve bir daha inmiyor.
+    image: mcr.microsoft.com/mssql/server:2022-latest
+
+    # Kutunun adı. Vermeseydik Docker rastgele bir ad üretirdi
+    # ("eticaretapi-db-1" gibi) ve komutlarda onu yazmak gerekirdi.
+    container_name: satik-db
+
+    environment:
+      # Lisans sözleşmesini kabul ediyoruz. Bu satır olmadan
+      # SQL Server hiç açılmıyor.
+      ACCEPT_EULA: "Y"
+
+      # ⚠️ ŞİFRE BU DOSYADA YAZMIYOR — .env dosyasından geliyor.
+      # Buraya yazsaydık repoya girer ve herkes görürdü.
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
+
+      # ⚠️ NEDEN Express, NEDEN Developer DEĞİL?
+      #
+      # Developer sürümü sınırsız ama LİSANSI YALNIZCA GELİŞTİRME
+      # İÇİN — canlıda kullanmak lisans ihlali. Express ise ücretsiz
+      # VE canlıda kullanılabilir; sınırı 10 GB veritabanı.
+      #
+      # Şimdiden Express kullanmak, yarın canlıya çıkarken sürpriz
+      # yaşamamak demek: yerelde çalışan şey orada da çalışacak.
+      MSSQL_PID: Express
+
+      # ⚠️ Windows'taki SQL Server'ın Turkish_CI_AS, imajın varsayılanı
+      # SQL_Latin1_General_CP1_CI_AS. Fark kozmetik değil: Türkçede
+      # i/İ ve ı/I eşleşir, ç ğ ı ö ş ü doğru sıralanır. Latin1'de
+      # ürün araması ve alfabetik listeler farklı sonuç verir.
+      #
+      # ⚠️ Bu değişken YALNIZCA volume boşken, sunucunun ilk
+      # kurulumunda okunuyor. Sonradan eklersen hiçbir şey olmaz;
+      # `down -v` ile sıfırdan kurmak gerekir.
+      MSSQL_COLLATION: Turkish_CI_AS
+
+    ports:
+      # "dışarıdaki port : içerideki port"
+      #
+      # ⚠️ 1433 DEĞİL 14330 — bilerek.
+      #
+      # Windows'taki mevcut SQL Server'ın zaten 1433'ü kullanıyor.
+      # Aynı portu istesekt Docker "port kullanımda" diye açılmazdı.
+      # 14330 verince İKİSİ BİRDEN çalışabiliyor ve hangisine
+      # bağlandığın port numarasından belli oluyor.
+      - "14330:1433"
+
+    volumes:
+      # ⚠️ EN ÖNEMLİ SATIR.
+      #
+      # Container silinince içindeki her şey gider. Veritabanı
+      # dosyaları container'ın içinde olsaydı `docker compose down`
+      # demek tüm veriyi silmek olurdu.
+      #
+      # "volume" Docker'ın yönettiği kalıcı bir disk alanı. Container
+      # gelir gider, volume kalır. Aşağıda tanımlı.
+      - mssql-data:/var/opt/mssql
+
+    # Bilgisayar yeniden başlarsa (ve Docker Desktop açılırsa)
+    # veritabanı kendiliğinden ayağa kalksın.
+    #
+    # "unless-stopped": sen `docker compose stop` demedikçe başlat.
+    # Yani bilerek durdurduysan Docker seni ezmiyor.
+    restart: unless-stopped
+
+    # Veritabanı GERÇEKTEN hazır mı?
+    #
+    # ⚠️ Container'ın "çalışıyor" görünmesi yetmez: SQL Server
+    # açılırken 10-20 saniye kadar bağlantı kabul etmiyor. 2. adımda
+    # API container'ı "veritabanı hazır olunca başla" diyebilsin diye
+    # şimdiden ölçüyoruz.
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      # İlk açılış yavaş; bu süre boyunca başarısız denemeler
+      # "sağlıksız" sayılmıyor.
+      start_period: 30s
+
+# Kalıcı disk alanları burada tanımlanıyor.
+#
+# `docker volume ls` ile görebilirsin; adı "eticaretapi_mssql-data"
+# gibi olacak (klasör adı önek olarak ekleniyor).
+volumes:
+  mssql-data:

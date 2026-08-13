@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="ETicaretAPI/ETicaretAPI.csproj" />
+  <Project Path="ETicaretAPI.Tests/ETicaretAPI.Tests.csproj" />
 </Solution>

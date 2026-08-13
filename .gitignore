@@ -369,3 +369,23 @@ FodyWeavers.xsd
 
 # Gerçek JWT anahtarı burada — repoya gitmesin
 appsettings.Development.json
+
+# Claude Code yapılandırması
+#
+# ⚠️ .claude/ KLASÖRÜNÜN TAMAMI YOKSAYILMAZ — bilinçli.
+#
+# Bu klasörde paylaşılması GEREKEN şeyler var:
+#   • skills/   → tasarım sistemi kuralları, token adları, "yapma"
+#                 listesi. Amacı kalıcı olmak; yoksayılırsa sadece
+#                 tek bir makinede yaşar ve temiz bir klonda kaybolur.
+#   • settings.json → takımca ortak ayarlar (eklentiler vb.)
+#
+# Yoksayılması gereken tek şey kişisel/makineye özel dosyadır:
+.claude/settings.local.json
+
+# Docker ortam değişkenleri — SQL Server sa şifresi burada.
+#
+# ⚠️ Şablonu (.env.example) repoda TUTUYORUZ, gerçeğini değil.
+# appsettings.Development.json ile aynı ayrım: kurulumu anlatan
+# dosya paylaşılır, sırrın kendisi paylaşılmaz.
+.env

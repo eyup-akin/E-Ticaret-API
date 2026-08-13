@@ -58,6 +58,9 @@ namespace ETicaretAPI.Data
         public DbSet<Kombin> Kombinler { get; set; }
         public DbSet<KombinUrun> KombinUrunler { get; set; }
 
+        // ⭐ YENİ — müşterinin kaydettiği siparişler ("hızlı siparişler")
+        public DbSet<HizliSiparis> HizliSiparisler { get; set; }
+
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -446,6 +449,41 @@ namespace ETicaretAPI.Data
                 e.HasOne<Product>()
                  .WithMany()
                  .HasForeignKey(ku => ku.ProductId)
+                 .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            // ⭐ YENİ — HIZLI SİPARİŞLER
+            modelBuilder.Entity<HizliSiparis>(e =>
+            {
+                // ⚠️ AYNI SİPARİŞ İKİ KEZ KAYDEDİLEMEZ.
+                //
+                // Kuralı kodda "önce sorgula, yoksa ekle" diye
+                // yazabilirdik ama iki istek aynı anda gelirse ikisi de
+                // "yok" cevabı alır ve listede aynı sipariş iki kez
+                // görünürdü. Kontrol ile yazma arasındaki mikrosaniye
+                // her zaman vardır — Favorites, CartItems ve
+                // StockAlerts'te alınan dersin aynısı.
+                //
+                // ⚠️ Bu indeks aynı zamanda "bu kullanıcının kayıtları"
+                // sorgusuna da hizmet ediyor: UserId önde olduğu için
+                // liste ucu (sonraki aşama) onu kullanabilecek.
+                e.HasIndex(h => new { h.UserId, h.OrderId })
+                 .IsUnique();
+
+                // Kullanıcı silinmiyor (hesap kapatma anonimleştiriyor).
+                // Restrict, projedeki diğer kişisel tablolarla aynı
+                // karar. ⚠️ Hesap kapatma akışı bu satırları AYRICA
+                // siliyor — kişisel tercih verisi, ticari kayıt değil.
+                e.HasOne<User>()
+                 .WithMany()
+                 .HasForeignKey(h => h.UserId)
+                 .OnDelete(DeleteBehavior.Restrict);
+
+                // ⚠️ Sipariş ticari kayıt, silinmiyor. Restrict:
+                // silinmeye kalkılırsa bu satır onu tutar.
+                e.HasOne<Order>()
+                 .WithMany()
+                 .HasForeignKey(h => h.OrderId)
                  .OnDelete(DeleteBehavior.Restrict);
             });
 

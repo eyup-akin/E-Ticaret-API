@@ -835,6 +835,17 @@ namespace ETicaretAPI.Controllers
                     .Where(p => p.UserId == userId)
                     .ExecuteDeleteAsync();
 
+                // ⭐ YENİ — kaydedilmiş ("hızlı") siparişler.
+                //
+                // ⚠️ Siparişin KENDİSİ silinmiyor — o ticari kayıt ve
+                // aşağıda anonimleştirmeyle korunuyor. Burada silinen
+                // yalnızca "müşteri bunu kaydetmişti" işareti; bu bir
+                // kişisel tercih, muhasebe kaydı değil.
+                // Favoriler ve sepetle aynı muamele.
+                await _context.HizliSiparisler
+                    .Where(h => h.UserId == userId)
+                    .ExecuteDeleteAsync();
+
                 // ---------- 6) OTURUMLARI KAPAT ----------
                 //
                 // Burada iptal etmek (RevokedAt) yerine SİLİYORUZ.

@@ -138,17 +138,21 @@ services:
         condition: service_healthy
 
     environment:
-      # ⚠️ NEDEN Development, NEDEN Production DEĞİL?
+      # ⚠️ ADIM 3'TE Production'A GEÇTİ — sebebi ölçüldü, tercih değil.
       #
-      # Bu adımda tek bir şeyi değiştiriyoruz: API'nin nerede
-      # çalıştığını. Aynı anda Production'a geçseydik CORS listesi
-      # (Cors:AllowedOrigins hâlâ "admin.senindomainin.com" yer
-      # tutucusu) admin paneli anında keserdi ve hatanın konteynerden
-      # mi ayardan mı geldiğini anlayamazdık.
+      # Funnel açılınca Development modunun dışarıya açtığı iki şey
+      # gerçek internetten okunabilir hâle geldi:
+      #   • /openapi/v1.json (124 KB) — admin dahil tüm uçların haritası
+      #   • HataYakalamaMiddleware ham exception mesajını döndürüyordu
       #
-      # ⚠️ Production'a geçiş Adım 3'ün işi: CORS listesi + gerçek
-      # alan adı + UseForwardedHeaders birlikte çözülecek.
-      ASPNETCORE_ENVIRONMENT: Development
+      # ⚠️ Production'da CORS artık beyaz listeye bakıyor; aşağıdaki
+      # liste eksikse admin panel sessizce çalışmaz.
+      ASPNETCORE_ENVIRONMENT: ${ASPNET_ORTAM:-Production}
+
+      # CORS beyaz listesi — virgülle ayrılmış origin'ler.
+      # ⚠️ Yalnızca tarayıcı istemcisini (admin panel) ilgilendiriyor;
+      # mobil uygulama native olduğu için CORS'a takılmaz.
+      Cors__AllowedOrigins: ${CORS_ORIGINLERI:-http://localhost:5173}
 
       # ⚠️ appsettings.json'daki bağlantı dizesini EZİYOR.
       #
@@ -251,6 +255,16 @@ services:
     volumes:
       # :ro — Caddy yapılandırmayı yalnızca okuyor.
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+
+      # Admin panelin derlenmiş çıktısı (statik dosyalar).
+      #
+      # ⚠️ BAŞKA BİR DEPONUN klasörüne bakıyor. Bu makinede üç depo
+      # yan yana durduğu için çalışıyor; sunucuya taşınırken bu yol
+      # kesinlikle değişecek. O yüzden .env'den ezilebilir.
+      #
+      # ⚠️ Panel DEĞİŞİNCE `npm run build` gerekiyor — Caddy diskteki
+      # hazır çıktıyı sunuyor, derleme yapmıyor.
+      - ${ADMIN_DIST:-../eticaret-admin/dist}:/srv/panel:ro
 
     restart: unless-stopped
 

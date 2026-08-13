@@ -28,11 +28,14 @@ builder.Services.AddCors(options =>
         }
         else
         {
-            // Canlıda YALNIZCA bilinen origin'ler (admin panel domaini).
-            // Liste appsettings > Cors:AllowedOrigins'ten okunur.
-            var izinliOriginler = builder.Configuration
-                .GetSection("Cors:AllowedOrigins")
-                .Get<string[]>() ?? Array.Empty<string>();
+            // Canlıda YALNIZCA bilinen origin'ler (admin panel adresi).
+            //
+            // ⭐ DEĞİŞTİ — dizi yerine virgülle ayrılmış metin.
+            // Ortam değişkeninden gelen dizi Cors__AllowedOrigins__0 gibi
+            // indeksli yazılıyor ve appsettings'teki dizi ile eleman eleman
+            // birleşiyor; hangi girdinin nereden geldiği anlaşılmıyordu.
+            var izinliOriginler = (builder.Configuration["Cors:AllowedOrigins"] ?? "")
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
             policy.WithOrigins(izinliOriginler)
                   .AllowAnyMethod()

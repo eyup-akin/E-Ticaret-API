@@ -1,18 +1,19 @@
 # ============================================================
-#  ADIM 3 — TERS VEKİL (reverse proxy)
+#  ADIM 3 — TERS VEKİL + ADMIN PANEL
 #
-#  Caddy'nin buradaki TEK işi: gerçek istemci IP'sini API'ye
-#  taşımak. TLS'i Tailscale Funnel sonlandırıyor, sertifika işi
-#  Caddy'de değil.
+#  Caddy iki iş yapıyor:
+#    1) Gerçek istemci IP'sini API'ye taşımak (PROXY → X-Forwarded-For)
+#    2) Admin paneli (statik React çıktısı) sunmak
 #
-#  ⚠️ NEDEN GEREKLİ?
-#  Funnel gerçek IP'yi yalnızca PROXY protokolüyle iletebiliyor,
-#  ASP.NET Core ise PROXY protokolü konuşmuyor. Caddy araya girip
-#  onu X-Forwarded-For başlığına çeviriyor.
+#  ⚠️ Panel ve API AYNI adresten çıkıyor. Bunun bedava kazancı:
+#  tarayıcı için origin aynı olduğundan CORS hiç devreye girmiyor ve
+#  panelin paketinde gömülü sunucu adresi yok — adres değişince
+#  yeniden derlemek gerekmiyor.
+#
+#  TLS'i Tailscale Funnel sonlandırıyor, Caddy sertifika almıyor.
 # ============================================================
 
 {
-	# Caddy kendi sertifikasını almasın — dışarıya bakan taraf Funnel.
 	auto_https off
 
 	# ⚠️ proxy_protocol YALNIZCA 9899'da.
@@ -23,26 +24,58 @@
 			proxy_protocol {
 				timeout 2s
 
-				# ⚠️ Burada Funnel'ın IP'si değil, DOCKER AĞ GEÇİDİ yazıyor.
+				# ⚠️ Funnel'ın IP'si değil, DOCKER AĞ GEÇİDİ.
 				# Yayımlanan portta kaynak adres yeniden yazıldığı için
-				# başlığı gönderen taraf Caddy'ye 172.x olarak görünüyor.
-				# Gerçek istemci adresi başlığın İÇİNDE geliyor.
+				# başlığı gönderen taraf Caddy'ye 172.x görünüyor;
+				# gerçek istemci adresi başlığın İÇİNDE geliyor.
 				allow 172.16.0.0/12
 			}
 		}
 	}
 }
 
+# İki dinleyici de aynı işi yaptığı için kural tek yerde duruyor.
+# ⚠️ Sıra önemli: en genel olan "handle" EN SONA kalmalı, yoksa
+# /api istekleri de statik dosya olarak aranır.
+(uygulama) {
+	# Paket 925 KB; sıkıştırma telefonda hissedilir fark yaratıyor.
+	encode zstd gzip
+
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+
+	handle /uploads/* {
+		reverse_proxy api:8080
+	}
+
+	# ⚠️ Şu an 401 dönüyor (IsLoopback konteynerde anlamsızlaştı).
+	# Yine de yönlendiriyoruz: gerçek kimlik doğrulama eklenince
+	# burada bir şey değişmesin diye.
+	handle /hangfire* {
+		reverse_proxy api:8080
+	}
+
+	# Geri kalan her şey admin panel.
+	handle {
+		root * /srv/panel
+
+		# ⚠️ SPA FALLBACK — react-router BrowserRouter kullanıyor.
+		# /urunler gibi adresler diskte dosya değil; bulunamayanı
+		# index.html'e düşürmezsek sayfa yenilendiğinde 404 gelir.
+		try_files {path} /index.html
+		file_server
+	}
+}
+
 # ---- LAN / geliştirme girişi ----
-# Admin (5173) ve mobil buraya bağlanıyor. Adres değişmedi: iki ön
-# yüzün .env dosyaları hâlâ 5289 diyor, sadece arkasındaki kutu değişti.
 :5289 {
-	reverse_proxy api:8080
+	import uygulama
 }
 
 # ---- Funnel girişi ----
-# `tailscale funnel --tls-terminated-tcp=443 --proxy-protocol=2
-#  tcp://127.0.0.1:9899` bu porta bağlanacak.
+# `tailscale funnel --bg --proxy-protocol=2 --tls-terminated-tcp=443
+#  tcp://127.0.0.1:9899` bu porta bağlanıyor.
 :9899 {
-	reverse_proxy api:8080
+	import uygulama
 }

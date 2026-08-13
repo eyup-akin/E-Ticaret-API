@@ -59,6 +59,11 @@ namespace ETicaretAPI.Controllers
         // tutarın dökümü. Toplamın tek kaynağı hâlâ _hesaplayici.
         private readonly KdvHesaplayici _kdv;
 
+        // ⭐ YENİ — "siparişi tekrarla" sepete ekliyor ve bunu
+        // CartController ile AYNI kuralla yapmak zorunda: yarış
+        // koşulu koruması ve adet üst sınırı orada yaşıyor.
+        private readonly SepetEkleyici _ekleyici;
+
         public OrdersController(
             AppDbContext context,
             IConfiguration config,
@@ -71,6 +76,7 @@ namespace ETicaretAPI.Controllers
             KdvHesaplayici kdv,                           // ⭐ YENİ (4.3)
             SozlesmeOnayServisi onaylar,                  // ⭐ YENİ (Aşama 10)
             KombinServisi kombin,                         // ⭐ YENİ
+            SepetEkleyici ekleyici,                       // ⭐ YENİ
             ILogger<OrdersController> log)                // ⭐ YENİ
         {
             _context = context;
@@ -85,6 +91,7 @@ namespace ETicaretAPI.Controllers
             _kdv = kdv;                                   // ⭐ YENİ
             _onaylar = onaylar;                           // ⭐ YENİ
             _kombin = kombin;                             // ⭐ YENİ
+            _ekleyici = ekleyici;                         // ⭐ YENİ
         }
 
 
@@ -1341,6 +1348,94 @@ namespace ETicaretAPI.Controllers
 
             return Ok(dto);
         }
+
+        // 🟡 POST /api/orders/5/tekrarla — siparişteki ürünleri sepete at
+        //
+        // ⚠️ SEPETİ TEMİZLEMİYOR, ÜSTÜNE EKLİYOR.
+        // Temizleseydik müşterinin o an sepetinde duran ürünleri
+        // habersiz silerdik; "tekrarla" bir istek, bir sıfırlama değil.
+        // Ürün sepette zaten varsa adet artıyor (sepete ekle butonuna
+        // basmakla aynı davranış).
+        //
+        // ⚠️ FİYAT DONDURULMUŞ HALİYLE GELMİYOR — sepete GÜNCEL fiyattan
+        // giriyor. Sipariş kalemindeki UnitPrice o günün fiyatı; onunla
+        // sepet kurmak müşteriye artık geçerli olmayan bir fiyat vaat
+        // ederdi. Fiyat değiştiyse sepet ekranı zaten "fiyat değişti"
+        // uyarısını gösteriyor (EklenmeFiyati deseni).
+        //
+        // ⚠️ STOK BAKILMIYOR. Sepet stok rezerve etmiyor; asıl kilit
+        // sipariş anındaki atomik UPDATE'te. Burada stoğa bakmak,
+        // müşteri ödemeye geçene kadar bayatlayacak bir kontrol olurdu.
+        //
+        // ⚠️ İPTAL EDİLMİŞ SİPARİŞTE DE ÇALIŞIYOR: "iptal ettim ama yine
+        // de alacağım" meşru bir istek. Durum kısıtı koymak, müşterinin
+        // aynı ürünleri elle aramasına yol açardı.
+        [HttpPost("{id}/tekrarla")]
+        public async Task<IActionResult> TekrarSiparis(int id)
+        {
+            var userId = GetUserId();
+
+            // ⚠️ Sahiplik SORGUNUN İÇİNDE — ayrı bir if unutulabilir.
+            var siparisVar = await _context.Orders
+                .AnyAsync(o => o.Id == id && o.UserId == userId);
+
+            if (!siparisVar)
+            {
+                return NotFound(new { mesaj = "Sipariş bulunamadı!" });
+            }
+
+            // ⚠️ AYNI ÜRÜN İKİ KALEMDE OLABİLİR (farklı satırlar aynı
+            // ürüne düşebiliyor). Adetleri önce topluyoruz; ayrı ayrı
+            // eklemek de doğru sonucu verirdi ama "atlananlar" listesinde
+            // aynı adı iki kez yazardı.
+            var kalemler = await _context.OrderItems
+                .Where(oi => oi.OrderId == id)
+                .GroupBy(oi => new { oi.ProductId, oi.ProductName })
+                .Select(g => new
+                {
+                    g.Key.ProductId,
+                    g.Key.ProductName,
+                    Adet = g.Sum(x => x.Quantity)
+                })
+                .ToListAsync();
+
+            var eklenen = 0;
+            var atlananlar = new List<string>();
+
+            foreach (var kalem in kalemler)
+            {
+                var sonuc = await _ekleyici.EkleAsync(userId, kalem.ProductId, kalem.Adet);
+
+                if (sonuc == SepeteEklemeSonucu.Eklendi)
+                {
+                    eklenen++;
+                }
+                else
+                {
+                    // ⚠️ Ad SİPARİŞTEN okunuyor, üründen değil: ürün
+                    // silinmişse zaten okunacak bir kayıt yok. Dondurulmuş
+                    // ad tam da bunun için tutuluyor.
+                    atlananlar.Add(kalem.ProductName);
+                }
+            }
+
+            // ⚠️ Mesajı SUNUCU kuruyor. Üç durum var (hepsi eklendi /
+            // bir kısmı eklendi / hiçbiri eklenemedi) ve mobilin bu
+            // kuralı ikinci kez yazmasının bir faydası yok.
+            var mesaj = eklenen == 0
+                ? "Bu siparişteki ürünlerin hiçbiri şu anda satışta değil."
+                : atlananlar.Count == 0
+                    ? "Siparişteki ürünler sepetine eklendi."
+                    : $"{eklenen} ürün sepetine eklendi. {atlananlar.Count} ürün artık satışta değil.";
+
+            return Ok(new
+            {
+                eklenen = eklenen,
+                atlananlar = atlananlar,
+                mesaj = mesaj
+            });
+        }
+
 
         // 🟡 PUT /api/orders/5/cancel — müşteri KENDİ siparişini iptal eder
         // Admin iptaliyle aynı bileşik işlem: stok iadesi + ödeme iadesi + sebep.

@@ -122,6 +122,12 @@ builder.Services.AddSingleton<ETicaretAPI.Services.SepetHesaplayici>();
 // tutarın tek kaynağı SepetHesaplayici'dir ve öyle kalmalı.
 builder.Services.AddSingleton<ETicaretAPI.Services.KdvHesaplayici>();
 
+// ⭐ YENİ — sepete ekleme kuralı (upsert + adet üst sınırı).
+//
+// ⚠️ Scoped, singleton DEĞİL: DbContext alıyor. Singleton yapmak
+// aynı context'i tüm isteklerde paylaşmak olurdu.
+builder.Services.AddScoped<ETicaretAPI.Services.SepetEkleyici>();
+
 
 // ⭐ YENİ — dış URL'lerden resim indirebilmek için HttpClient fabrikası
 builder.Services.AddHttpClient();

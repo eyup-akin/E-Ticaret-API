@@ -1169,14 +1169,24 @@ namespace ETicaretAPI.Controllers
             // ⚠️ Favori bir NİYET kaydı, satış değil: "almadım ama
             // gözüm üstünde". Satışla aynı şeyi ölçmediği için ayrı
             // bir bölüm olmayı hak ediyor.
-            var favoriIdler = await _context.Favorites
+            //
+            // ⭐ DEĞİŞTİ — sayı da geliyor, sadece id değil.
+            //
+            // ⚠️ Şerit "en çok favorilenen" diyor ama KAÇ KİŞİ olduğunu
+            // söylemiyordu; sıralamanın dayandığı ölçü görünmüyordu.
+            // Sayı zaten bu sorgunun içinde hesaplanıyor (sıralama ona
+            // göre); ayrıca FavorileriDoldur çağırmak aynı GROUP BY'ı
+            // ikinci kez çalıştırmak olurdu.
+            var favoriSayilari = await _context.Favorites
                 .Where(f => gorunur.Any(p => p.Id == f.ProductId))
                 .GroupBy(f => f.ProductId)
                 .OrderByDescending(g => g.Count())
                 .ThenBy(g => g.Key)
-                .Select(g => g.Key)
+                .Select(g => new { ProductId = g.Key, Sayi = g.Count() })
                 .Take(BolumUrunSayisi)
                 .ToListAsync();
+
+            var favoriIdler = favoriSayilari.Select(f => f.ProductId).ToList();
 
             // ---- 3) YENİ GELENLER ----
             //
@@ -1306,6 +1316,26 @@ namespace ETicaretAPI.Controllers
             await PuanlariDoldur(urunler);
 
             var sozluk = urunler.ToDictionary(u => u.Id);
+
+            // ⭐ YENİ — favori şeridindeki ürünlere "kaç kişi favoriledi".
+            //
+            // ⚠️ YALNIZCA FAVORİ ŞERİDİNDEKİLER DOLUYOR. Diğer ürünlerde
+            // 0 kalıyor ve mobil bu sayıyı sadece favori şeridinde
+            // çiziyor — sayının anlamı başlıktan geliyor ("en çok
+            // favorilenen"), rastgele bir kartta kalp sayısı göstermek
+            // müşteriye ne yapacağını bilmediği bir rakam verirdi.
+            //
+            // ⚠️ DTO'lar şeritler arasında PAYLAŞILIYOR (aynı ürün hem
+            // popülerde hem favoride olabilir, sözlükte tek nesne).
+            // Bu yüzden gösterim kararı sunucunun doldurup
+            // doldurmamasına DEĞİL, mobilin şerit anahtarına bakıyor.
+            foreach (var favori in favoriSayilari)
+            {
+                if (sozluk.TryGetValue(favori.ProductId, out var urun))
+                {
+                    urun.FavoriteCount = favori.Sayi;
+                }
+            }
 
             // ---- BÖLÜMLERİ KUR ----
             var bolumler = new List<object>();

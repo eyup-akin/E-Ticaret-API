@@ -33,16 +33,22 @@ namespace ETicaretAPI.Controllers
         // varsa indirim otomatik uygulanıyor.
         private readonly ETicaretAPI.Services.KombinServisi _kombin;
 
+        // ⭐ YENİ — sepete ekleme kuralı (upsert + üst sınır).
+        // "Siparişi tekrarla" da aynı kuralı çağırıyor.
+        private readonly ETicaretAPI.Services.SepetEkleyici _ekleyici;
+
         public CartController(
             AppDbContext context,
             ETicaretAPI.Services.MagazaAyarlari ayarlar,
             ETicaretAPI.Services.SepetHesaplayici hesaplayici,   // ⭐ YENİ
-            ETicaretAPI.Services.KombinServisi kombin)           // ⭐ YENİ
+            ETicaretAPI.Services.KombinServisi kombin,           // ⭐ YENİ
+            ETicaretAPI.Services.SepetEkleyici ekleyici)         // ⭐ YENİ
         {
             _context = context;
             _ayarlar = ayarlar;
             _hesaplayici = hesaplayici;                          // ⭐ YENİ
             _kombin = kombin;
+            _ekleyici = ekleyici;                                // ⭐ YENİ
         }
 
         // Token'dan giriş yapmış kullanıcının id'sini okur
@@ -158,31 +164,13 @@ namespace ETicaretAPI.Controllers
             });
         }
 
-        // Sepette bir ürünün en fazla kaç adet olabileceği.
-        //
-        // Neden sabit? Üç yerde aynı sayı geçiyor: CartAddDto'daki Range,
-        // mobildeki adet seçici ve aşağıdaki kırpma. Sihirli sayıyı koda
-        // gömmek yerine isim vermek, değiştirmek gerektiğinde tek yer arattırır.
-        
-
         // 🟡 POST /api/cart — sepete ekle
         //
-        // ⚠️ ESKİ KOD İKİ YARIŞ KOŞULUNA AÇIKTI:
+        // ⭐ DEĞİŞTİ — upsert mantığı SepetEkleyici servisine taşındı.
         //
-        //   1) KAYIP GÜNCELLEME
-        //      FirstOrDefault ile adet okunuyor, sonra += yapılıyordu.
-        //      Müşteri butona hızlıca iki kez bassa ikisi de 1 okuyup
-        //      ikisi de 2 yazardı → sonuç 2, olması gereken 3.
-        //
-        //   2) MÜKERRER SATIR
-        //      "Sepette var mı" kontrolü ile INSERT arasında boşluk vardı.
-        //      İki istek aynı anda gelirse ikisi de "yok" görüp ikisi de
-        //      eklerdi → aynı ürün sepette iki satır.
-        //
-        // YENİ YAKLAŞIM — "UPSERT":
-        //   Önce oku-karar ver-yaz yapmıyoruz. Doğrudan yazmayı deniyoruz
-        //   ve sonucuna bakıyoruz. Stok ve kupon düzeltmelerindeki mantığın
-        //   aynısı.
+        // Kural (yarış koşulu korumaları + 99 kırpması) burada tek
+        // tüketicisi olduğu sürece duruyordu; "siparişi tekrarla" ikinci
+        // tüketici olunca ortak yere çıktı. Gerekçenin tamamı serviste.
         [HttpPost]
         public async Task<IActionResult> AddToCart([FromBody] CartAddDto dto)
         {
@@ -193,128 +181,12 @@ namespace ETicaretAPI.Controllers
 
             var userId = GetUserId();
 
-            // Ürün gerçekten var mı VE satışta mı?
-            //
-            // İki koşul tek sorguda: "önce var mı bak, sonra aktif mi bak"
-            // demek veritabanına iki tur gitmek olurdu. Aynı satırdan iki
-            // bilgi istiyoruz, tek sorgu yeter.
-            //
-            // ⚠️ Bu kontrol yarış koşuluna açık — ürün tam bu anda pasife
-            // alınabilir. Ve bu SORUN DEĞİL: pasif ürünün sepete girmesi
-            // kimseye zarar vermez, çünkü asıl kilit sipariş anında
-            // (OrdersController'daki atomik UPDATE) duruyor. Buradaki kontrol
-            // kullanıcıya ERKEN ve ANLAŞILIR mesaj vermek için, koruma değil.
-            //
-            // Mesajı bilerek tek tuttuk: "ürün yok" ile "ürün pasif" müşteri
-            // açısından aynı sonuca çıkıyor — alamıyor. İkisini ayırmak
-            // müşteriye kullanamayacağı bir bilgi verirdi.
-            // ⭐ DEĞİŞTİ (5.4) — AnyAsync yerine fiyatı da getiren sorgu.
-            //
-            // Eskiden sadece "satışta mı?" soruluyordu. Artık müşterinin
-            // şu anda gördüğü fiyatı da kaydediyoruz (EklenmeFiyati), o
-            // yüzden değerin kendisi lazım.
-            //
-            // ⚠️ Hâlâ TEK sorgu. "Önce var mı bak, sonra fiyatı çek"
-            // deseydik veritabanına iki tur giderdik.
-            var urun = await _context.Products
-                .Where(p => p.Id == dto.ProductId && p.IsActive)
-                .Select(p => new { p.Price })
-                .FirstOrDefaultAsync();
+            var sonuc = await _ekleyici.EkleAsync(userId, dto.ProductId, dto.Quantity);
 
-            if (urun == null)
+            if (sonuc == ETicaretAPI.Services.SepeteEklemeSonucu.UrunYok)
             {
                 return NotFound(new { mesaj = "Bu ürün şu anda satışta değil biladerim!" });
             }
-
-            // Lambda içinde kullanacağımız için yerel değişkene alıyoruz
-            var adet = dto.Quantity;
-
-            // ⭐ YENİ (5.4) — müşterinin ŞU AN gördüğü fiyat.
-            //
-            // ⚠️ Bu değer siparişte KULLANILMAYACAK. Sipariş güncel
-            // fiyattan oluşuyor; bu sadece "sepete atarken ne görmüştü"
-            // sorusunun cevabı.
-            var guncelFiyat = urun.Price;
-
-            // ---------- 1) SATIR VARSA ATOMİK ARTIR ----------
-            //
-            // Ürettiği SQL:
-            //     UPDATE CartItems
-            //     SET Quantity = Quantity + @adet
-            //     WHERE UserId = @userId AND ProductId = @productId
-            //
-            // Okuma yok — veritabanı mevcut değeri kendi okuyup üstüne ekliyor,
-            // hepsi satır kilidi altında tek cümlede. Kayıp güncelleme imkânsız.
-            // ⭐ DEĞİŞTİ (5.4) — adetle birlikte EklenmeFiyati de yazılıyor.
-            //
-            // ⚠️ TANIK HER EKLEMEDE TAZELENİYOR — bilerek.
-            //
-            // Müşteri bu ürünü tekrar sepete atıyorsa ürün sayfasında
-            // GÜNCEL fiyatı görüp öyle basmış demektir. Alan "en son
-            // gördüğü fiyat"ı tutuyor; eski değeri korusaydık, müşteriye
-            // az önce kendi gözüyle gördüğü ve kabul ettiği fiyat için
-            // "dikkat, fiyat değişti" uyarısı gösterirdik.
-            var etkilenen = await _context.CartItems
-                .Where(c => c.UserId == userId && c.ProductId == dto.ProductId)
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(c => c.Quantity, c => c.Quantity + adet)
-                    .SetProperty(c => c.EklenmeFiyati, guncelFiyat));
-
-            // ---------- 2) SATIR YOKTUYSA EKLE ----------
-            if (etkilenen == 0)
-            {
-                var yeniOge = new CartItem
-                {
-                    UserId = userId,
-                    ProductId = dto.ProductId,
-                    Quantity = adet,
-                    EklenmeFiyati = guncelFiyat   // ⭐ YENİ (5.4)
-                };
-
-                _context.CartItems.Add(yeniOge);
-
-                try
-                {
-                    await _context.SaveChangesAsync();
-                }
-                catch (DbUpdateException)
-                {
-                    // Tam bu anda başka bir istek satırı oluşturdu ve benzersiz
-                    // indeks bizi reddetti. Bu bir HATA değil, beklenen bir yarış
-                    // sonucu — yapılacak şey artırmaya geçmek.
-                    //
-                    // ⚠️ Başarısız Add hâlâ change tracker'da "Added" durumda.
-                    //    Detach etmezsek bu context'te bir sonraki SaveChanges
-                    //    aynı INSERT'i tekrar denemeye kalkar.
-                    _context.Entry(yeniOge).State = EntityState.Detached;
-
-                    await _context.CartItems
-                        .Where(c => c.UserId == userId && c.ProductId == dto.ProductId)
-                        .ExecuteUpdateAsync(s => s
-                            .SetProperty(c => c.Quantity, c => c.Quantity + adet)
-                            .SetProperty(c => c.EklenmeFiyati, guncelFiyat));
-                }
-            }
-
-            // ---------- 3) ÜST SINIRA KIRP ----------
-            //
-            // Artırma sınırsız olduğu için müşteri butona 50 kez basarsa adet
-            // 99'u aşabilir. Ayrı ve koşullu bir UPDATE ile kırpıyoruz.
-            //
-            // Neden 1. adımdaki koşula "Quantity + adet <= 99" eklemedik?
-            //   Eklersek etkilenen == 0 iki farklı anlama gelirdi:
-            //   "satır yok" ve "sınır aşıldı". Ayırt edemez, yanlışlıkla
-            //   ikinci bir satır eklemeye çalışırdık.
-            //
-            // Bu cümle idempotent: adet 99'un altındaysa hiçbir satırı
-            // etkilemez, üstündeyse 99'a çeker. İki kez çalışsa da zarar yok.
-            await _context.CartItems
-                .Where(c => c.UserId == userId
-                         && c.ProductId == dto.ProductId
-                         && c.Quantity > _ayarlar.SepetMaksAdet)
-                .ExecuteUpdateAsync(s => s.SetProperty(
-                    c => c.Quantity,
-                    c => _ayarlar.SepetMaksAdet));
 
             return Ok(new { mesaj = "Ürün sepete eklendi biladerim!" });
         }

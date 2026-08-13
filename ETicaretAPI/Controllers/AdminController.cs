@@ -695,8 +695,27 @@ namespace ETicaretAPI.Controllers
             // ---------- 1) UZUN SÜREDİR HAZIRLANIYOR ----------
             var esikTarihi = simdi.AddDays(-gunEsigi);
 
-            var bekleyenler = await _context.Orders
-                .Where(o => o.Status == SiparisDurumlari.Hazirlaniyor && o.CreatedAt < esikTarihi)
+            // ⭐ DEĞİŞTİ — SORGU İKİYE AYRILDI: SAYIM + ÖRNEKLER.
+            //
+            // ⚠️ ESKİDEN `adet` ÖRNEKLERİN SAYISIYDI VE 8'DE TIKANIYORDU.
+            //
+            // Liste `.Take(8)` ile kırpılıyor ve `adet = liste.Count`
+            // yazılıyordu. Yani 50 sipariş bekliyorsa cevapta "8" gidiyor,
+            // özet metni de "8 sipariş 3+ gündür hazırlanıyor" diyordu.
+            // Sayı ekranda görünen bir şey olduğu için hata sessizdi:
+            // rakam makul duruyor ama YANLIŞ.
+            //
+            // Sayımı ayırınca `adet` gerçek toplamı taşıyor; `ogeler` yine
+            // 8 örnekle sınırlı (açılır listede daha fazlası zaten
+            // gösterilmiyor). Menü rozetlerinin "9+" gösterebilmesi de
+            // buna bağlı — kırpılmış sayı asla 9'u geçemezdi.
+            var bekleyenSorgu = _context.Orders
+                .Where(o => o.Status == SiparisDurumlari.Hazirlaniyor
+                         && o.CreatedAt < esikTarihi);
+
+            var bekleyenToplam = await bekleyenSorgu.CountAsync();
+
+            var bekleyenler = await bekleyenSorgu
                 .OrderBy(o => o.CreatedAt)            // en eski = en acil, üstte
                 .Join(_context.Users,
                       o => o.UserId,
@@ -710,17 +729,17 @@ namespace ETicaretAPI.Controllers
                     tutar = x.o.Total,
                     link = "/siparisler/" + x.o.Id    // tıklayınca gidilecek yer
                 })
-                .Take(8)
+                .Take(DikkatOgeSiniri)
                 .ToListAsync();
 
-            if (bekleyenler.Count > 0)
+            if (bekleyenToplam > 0)
             {
                 uyarilar.Add(new
                 {
                     tur = "bekleyen_siparis",
                     baslik = "Bekleyen sipariş",
-                    ozet = bekleyenler.Count + " sipariş " + gunEsigi + "+ gündür hazırlanıyor",
-                    adet = bekleyenler.Count,
+                    ozet = bekleyenToplam + " sipariş " + gunEsigi + "+ gündür hazırlanıyor",
+                    adet = bekleyenToplam,
                     oncelik = "yuksek",
                     tumunuGorLink = "/siparisler",
                     ogeler = bekleyenler
@@ -728,8 +747,19 @@ namespace ETicaretAPI.Controllers
             }
 
             // ---------- 2) KRİTİK STOK ----------
-            var kritikStok = await _context.Products
-                .Where(p => p.Stock < _ayarlar.StokAzEsigi)
+            var kritikSorgu = _context.Products
+                .Where(p => p.Stock < _ayarlar.StokAzEsigi);
+
+            var kritikToplam = await kritikSorgu.CountAsync();
+
+            // ⚠️ Tükenen sayısı da AYRI sayılıyor. Eskiden kırpılmış
+            // listeden hesaplanıyordu: 8 örneğin içinde tükenen yoksa
+            // "tükendi" uyarısı hiç çıkmıyor ve öncelik "orta"da kalıyordu
+            // — oysa katalogda tükenmiş ürün olabilirdi. Öncelik yanlış
+            // hesaplanan bir uyarı, uyarı olmaktan çıkar.
+            var tukenen = await _context.Products.CountAsync(p => p.Stock == 0);
+
+            var kritikStok = await kritikSorgu
                 .OrderBy(p => p.Stock)                // en azı en üstte
                 .Join(_context.Categories,
                       p => p.CategoryId,
@@ -744,21 +774,19 @@ namespace ETicaretAPI.Controllers
                     stok = x.p.Stock,                 // sağda "3 adet" diye görünecek
                     link = "/urunler/" + x.p.Id + "/duzenle"
                 })
-                .Take(8)
+                .Take(DikkatOgeSiniri)
                 .ToListAsync();
 
-            if (kritikStok.Count > 0)
+            if (kritikToplam > 0)
             {
-                var tukenen = kritikStok.Count(k => k.stok == 0);
-
                 uyarilar.Add(new
                 {
                     tur = "kritik_stok",
                     baslik = "Kritik stok",
                     ozet = tukenen > 0
-                        ? kritikStok.Count + " üründe stok azaldı (" + tukenen + " tanesi tükendi)"
-                        : kritikStok.Count + " üründe stok azaldı",
-                    adet = kritikStok.Count,
+                        ? kritikToplam + " üründe stok azaldı (" + tukenen + " tanesi tükendi)"
+                        : kritikToplam + " üründe stok azaldı",
+                    adet = kritikToplam,
                     oncelik = tukenen > 0 ? "yuksek" : "orta",
                     tumunuGorLink = "/urunler",
                     ogeler = kritikStok
@@ -780,8 +808,12 @@ namespace ETicaretAPI.Controllers
             // dolayısıyla admin bu bölümü hiç görmeyecek.
             if (User.IsInRole("superadmin"))
             {
-                var bekleyenBasvurular = await _context.AdminBasvurular
-                    .Where(b => b.Durum == BasvuruDurumu.Beklemede)
+                var basvuruSorgu = _context.AdminBasvurular
+                    .Where(b => b.Durum == BasvuruDurumu.Beklemede);
+
+                var basvuruToplam = await basvuruSorgu.CountAsync();
+
+                var bekleyenBasvurular = await basvuruSorgu
 
                     // En ESKİ üstte: en uzun bekleyen en acil olandır.
                     .OrderBy(b => b.CreatedAt)
@@ -817,17 +849,17 @@ namespace ETicaretAPI.Controllers
                         // için görünmez) ama key'i benzersiz yapıyor.
                         link = "/admin-basvurulari?id=" + b.Id
                     })
-                    .Take(8)
+                    .Take(DikkatOgeSiniri)
                     .ToListAsync();
 
-                if (bekleyenBasvurular.Count > 0)
+                if (basvuruToplam > 0)
                 {
                     uyarilar.Add(new
                     {
                         tur = "bekleyen_basvuru",
                         baslik = "Bekleyen admin başvurusu",
-                        ozet = bekleyenBasvurular.Count + " kişi yöneticilik başvurusu yaptı",
-                        adet = bekleyenBasvurular.Count,
+                        ozet = basvuruToplam + " kişi yöneticilik başvurusu yaptı",
+                        adet = basvuruToplam,
 
                         // "orta": bekletmek zarar vermiyor ama insan
                         // bekliyor. Kritik stok gibi para kaybettirmez.
@@ -850,8 +882,12 @@ namespace ETicaretAPI.Controllers
             // ⚠️ Tüm adminler görüyor (başvurulardan farklı olarak):
             // destek herkesin işi, başvuru kararı ise yalnızca
             // süperadmininki.
-            var acikTalepler = await _context.SupportTickets
-                .Where(t => t.Durum == DestekDurumu.Acik)
+            var destekSorgu = _context.SupportTickets
+                .Where(t => t.Durum == DestekDurumu.Acik);
+
+            var destekToplam = await destekSorgu.CountAsync();
+
+            var acikTalepler = await destekSorgu
 
                 // En ESKİ üstte: en uzun bekleyen müşteri en acil olan.
                 .OrderBy(t => t.UpdatedAt)
@@ -872,17 +908,17 @@ namespace ETicaretAPI.Controllers
                     tutar = (decimal?)null,
                     link = "/destek/" + t.Id
                 })
-                .Take(8)
+                .Take(DikkatOgeSiniri)
                 .ToListAsync();
 
-            if (acikTalepler.Count > 0)
+            if (destekToplam > 0)
             {
                 uyarilar.Add(new
                 {
                     tur = "bekleyen_destek",
                     baslik = "Cevap bekleyen destek talebi",
-                    ozet = acikTalepler.Count + " talep cevap bekliyor",
-                    adet = acikTalepler.Count,
+                    ozet = destekToplam + " talep cevap bekliyor",
+                    adet = destekToplam,
 
                     // "yuksek": karşı tarafta bekleyen bir İNSAN var ve
                     // beklemesi doğrudan memnuniyeti düşürüyor.
@@ -904,6 +940,12 @@ namespace ETicaretAPI.Controllers
             // iadesi) ama o bir KARAR değil, akışın son adımı; paneli
             // yapılacak iş listesi olarak tutmak için burada yalnızca
             // karar bekleyenler var.
+            // ⚠️ Sayım siparişle JOIN'siz yapılıyor: iade talebi siparişe
+            // Restrict FK ile bağlı, yani sipariş her zaman var. JOIN
+            // sayıyı değiştirmiyor, sadece pahalılaştırırdı.
+            var iadeToplam = await _context.ReturnRequests
+                .CountAsync(r => r.Durum == IadeDurumu.TalepEdildi);
+
             var bekleyenIadeler = await (
                 from r in _context.ReturnRequests
                 where r.Durum == IadeDurumu.TalepEdildi
@@ -923,17 +965,17 @@ namespace ETicaretAPI.Controllers
                     // verseydik React "aynı key" uyarısı verirdi.
                     link = "/iadeler?id=" + r.Id
                 })
-                .Take(8)
+                .Take(DikkatOgeSiniri)
                 .ToListAsync();
 
-            if (bekleyenIadeler.Count > 0)
+            if (iadeToplam > 0)
             {
                 uyarilar.Add(new
                 {
                     tur = "bekleyen_iade",
                     baslik = "Karar bekleyen iade",
-                    ozet = bekleyenIadeler.Count + " iade talebi karar bekliyor",
-                    adet = bekleyenIadeler.Count,
+                    ozet = iadeToplam + " iade talebi karar bekliyor",
+                    adet = iadeToplam,
 
                     // "yuksek": karşı tarafta parası bloke olmuş bir
                     // müşteri bekliyor.
@@ -950,6 +992,20 @@ namespace ETicaretAPI.Controllers
         // ==========================================================
         //  KULLANICI YÖNETİMİ — SADECE SÜPER ADMİN
         // ==========================================================
+
+        // ⭐ YENİ — "dikkat gerektirenler" cevabında uyarı başına kaç ÖRNEK
+        // gönderilecek.
+        //
+        // ⚠️ Bu sayı `adet` alanını ARTIK ETKİLEMİYOR. Eskiden liste
+        // kırpılıyor ve `adet = liste.Count` yazılıyordu; yani 50 bekleyen
+        // sipariş varken cevapta "8" gidiyordu. Sayım artık ayrı bir
+        // COUNT sorgusundan geliyor, bu sabit yalnızca açılır listede
+        // gösterilen örnek sayısını sınırlıyor.
+        //
+        // 8: bildirim panelinde kaydırmadan görünen satır sayısı. Daha
+        // fazlası hem cevabı şişirir hem de listeyi "tümünü gör"
+        // bağlantısının yerine geçmeye çalışan bir şeye dönüştürür.
+        private const int DikkatOgeSiniri = 8;
 
         // Panelden verilebilecek roller — WHITELIST.
         // 'superadmin' bu listede YOK ve olmayacak:

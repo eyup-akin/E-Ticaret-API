@@ -1,0 +1,48 @@
+# ============================================================
+#  ADIM 3 — TERS VEKİL (reverse proxy)
+#
+#  Caddy'nin buradaki TEK işi: gerçek istemci IP'sini API'ye
+#  taşımak. TLS'i Tailscale Funnel sonlandırıyor, sertifika işi
+#  Caddy'de değil.
+#
+#  ⚠️ NEDEN GEREKLİ?
+#  Funnel gerçek IP'yi yalnızca PROXY protokolüyle iletebiliyor,
+#  ASP.NET Core ise PROXY protokolü konuşmuyor. Caddy araya girip
+#  onu X-Forwarded-For başlığına çeviriyor.
+# ============================================================
+
+{
+	# Caddy kendi sertifikasını almasın — dışarıya bakan taraf Funnel.
+	auto_https off
+
+	# ⚠️ proxy_protocol YALNIZCA 9899'da.
+	# 5289'a da koysaydık LAN'dan gelen normal istekler PROXY başlığı
+	# beklenirken 2 saniye takılırdı.
+	servers :9899 {
+		listener_wrappers {
+			proxy_protocol {
+				timeout 2s
+
+				# ⚠️ Burada Funnel'ın IP'si değil, DOCKER AĞ GEÇİDİ yazıyor.
+				# Yayımlanan portta kaynak adres yeniden yazıldığı için
+				# başlığı gönderen taraf Caddy'ye 172.x olarak görünüyor.
+				# Gerçek istemci adresi başlığın İÇİNDE geliyor.
+				allow 172.16.0.0/12
+			}
+		}
+	}
+}
+
+# ---- LAN / geliştirme girişi ----
+# Admin (5173) ve mobil buraya bağlanıyor. Adres değişmedi: iki ön
+# yüzün .env dosyaları hâlâ 5289 diyor, sadece arkasındaki kutu değişti.
+:5289 {
+	reverse_proxy api:8080
+}
+
+# ---- Funnel girişi ----
+# `tailscale funnel --tls-terminated-tcp=443 --proxy-protocol=2
+#  tcp://127.0.0.1:9899` bu porta bağlanacak.
+:9899 {
+	reverse_proxy api:8080
+}

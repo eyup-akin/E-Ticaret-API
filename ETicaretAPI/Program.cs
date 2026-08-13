@@ -416,6 +416,48 @@ var app = builder.Build();
 app.UseMiddleware<HataYakalamaMiddleware>();
 
 
+// ⭐ YENİ — VEKİL ARKASINDA GERÇEK İSTEMCİ IP'Sİ
+//
+// Vekil (Caddy) arkasına geçince Kestrel'in gördüğü adres vekilin
+// adresi olur ve IP'ye göre bölünen rate limit sayaçları herkesi TEK
+// kovaya toplar: bir kişi giriş limitini doldurunca hepsi 429 yer.
+//
+// ⚠️ Liste BOŞSA middleware hiç eklenmiyor — X-Forwarded-For'a körü
+// körüne güvenmek istemciye "IP'mi ben söylerim" demek olurdu.
+// appsettings'te boş, yalnızca compose dolduruyor.
+var guvenilirVekilAglari = builder.Configuration["Vekil:GuvenilirAglar"];
+if (!string.IsNullOrWhiteSpace(guvenilirVekilAglari))
+{
+    var vekilSecenekleri = new Microsoft.AspNetCore.Builder.ForwardedHeadersOptions
+    {
+        ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor
+                         | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto,
+
+        // ⚠️ 1 kalmalı: yalnızca EN SAĞDAKİ kayıt okunur, o da vekilin
+        // kendi eklediğidir. Artırmak istemcinin yazdığı sahte
+        // kayıtları da kabul etmek olurdu.
+        ForwardLimit = 1
+    };
+
+    // Varsayılan liste sadece loopback tanıyor; temizleyip kendi
+    // ağlarımızı koyuyoruz.
+    vekilSecenekleri.KnownNetworks.Clear();
+    vekilSecenekleri.KnownProxies.Clear();
+
+    foreach (var cidr in guvenilirVekilAglari.Split(
+                 ',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        // ⚠️ İki ayrı IPNetwork tipi var. System.Net olan CIDR metnini
+        // ayrıştırıyor, HttpOverrides olan ise seçeneklerin beklediği tip.
+        var ag = System.Net.IPNetwork.Parse(cidr);
+        vekilSecenekleri.KnownNetworks.Add(
+            new Microsoft.AspNetCore.HttpOverrides.IPNetwork(ag.BaseAddress, ag.PrefixLength));
+    }
+
+    app.UseForwardedHeaders(vekilSecenekleri);
+}
+
+
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();

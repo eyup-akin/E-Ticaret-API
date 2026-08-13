@@ -187,14 +187,20 @@ services:
       # (Adım 3) .env'de tek satır değişecek.
       Uygulama__TabanUrl: ${API_TABAN_URL:-http://localhost:5289}
 
-    ports:
-      # ⚠️ 5289:8080 — dışarısı 5289, içerisi 8080.
+      # X-Forwarded-For'a hangi ağlardan güvenilecek — yani Caddy'nin ağı.
       #
-      # Konteyner 8080 dinliyor (Dockerfile'da ayarlı) ama dışarıya
-      # 5289 olarak çıkıyor. Sebep: admin `.env`'deki VITE_API_IP ve
-      # mobil `.env`'deki EXPO_PUBLIC_API_IP zaten 5289'a bakıyor.
-      # Böylece iki ön yüzde hiçbir şey değişmiyor.
-      - "5289:8080"
+      # ⚠️ Bu değer olmadan Adım 3'ün hiçbir anlamı yok: API başlığı
+      # görür ama yok sayar, herkes yine vekilin IP'si olarak görünür.
+      Vekil__GuvenilirAglar: ${VEKIL_AGLARI:-172.16.0.0/12}
+
+    # ⚠️ ARTIK PORT YAYIMLANMIYOR — ADIM 3'TE DEĞİŞTİ.
+    #
+    # 5289'u Caddy devraldı. API'yi de doğrudan açık bıraksaydık
+    # X-Forwarded-For sahteciliğine kapı açardık: Caddy'yi atlayıp
+    # doğrudan API'ye bağlanan biri başlığı kendi yazar ve rate limit
+    # sayacını istediği gibi sıfırlardı. Tek giriş = tek kural.
+    #
+    # API'ye ulaşmak isteyen konteynerler iç ağdan "api:8080" diyor.
 
     volumes:
       # ⚠️ ÜRÜN GÖRSELLERİ — ADIM 2'NİN EN KRİTİK SATIRI.
@@ -216,6 +222,35 @@ services:
       # bir klasör olmayacak, named volume'e dönecek ve görseller
       # oraya bir kez taşınacak.
       - ./ETicaretAPI/wwwroot/uploads:/app/wwwroot/uploads
+
+    restart: unless-stopped
+
+  # ============================================================
+  #  CADDY — ters vekil
+  #
+  #  Tek işi gerçek istemci IP'sini API'ye taşımak. TLS'i Funnel
+  #  sonlandırıyor; Caddy burada sertifika almıyor.
+  # ============================================================
+  caddy:
+    image: caddy:2-alpine
+    container_name: satik-caddy
+
+    depends_on:
+      - api
+
+    ports:
+      # LAN girişi — admin ve mobil buraya bağlanıyor.
+      # Adres değişmedi, arkasındaki kutu değişti.
+      - "5289:5289"
+
+      # Funnel girişi — PROXY protokolü bu portta konuşuluyor.
+      # ⚠️ Bu portu elle tarayıcıda açma; PROXY başlığı beklediği
+      # için normal istek 2 sn takılıp düşer.
+      - "9899:9899"
+
+    volumes:
+      # :ro — Caddy yapılandırmayı yalnızca okuyor.
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
 
     restart: unless-stopped
 

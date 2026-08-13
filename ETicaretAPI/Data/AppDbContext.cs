@@ -470,6 +470,26 @@ namespace ETicaretAPI.Data
                 e.HasIndex(h => new { h.UserId, h.OrderId })
                  .IsUnique();
 
+                // ⚠️ AYNI İÇERİK İKİ KEZ KAYDEDİLEMEZ.
+                //
+                // Üstteki indeks aynı SİPARİŞİ, bu indeks aynı
+                // İÇERİĞİ engelliyor. İkisi farklı sorular: müşteri
+                // zeytinyağı siparişini kaydettikten sonra ertesi gün
+                // yine zeytinyağı sipariş edip onu da kaydedebiliyordu
+                // — farklı sipariş, aynı liste satırı.
+                //
+                // ⚠️ Kontrolü controller'da "önce sorgula, yoksa ekle"
+                // diye de yazabilirdik ama iki eşzamanlı istek ikisi de
+                // "yok" görürdü. Garantiyi kod değil veritabanı verir.
+                //
+                // SHA-256 hex tam 64 karakter.
+                e.HasIndex(h => new { h.UserId, h.IcerikImzasi })
+                 .IsUnique();
+
+                e.Property(h => h.IcerikImzasi)
+                 .HasMaxLength(64)
+                 .IsRequired();
+
                 // Kullanıcı silinmiyor (hesap kapatma anonimleştiriyor).
                 // Restrict, projedeki diğer kişisel tablolarla aynı
                 // karar. ⚠️ Hesap kapatma akışı bu satırları AYRICA

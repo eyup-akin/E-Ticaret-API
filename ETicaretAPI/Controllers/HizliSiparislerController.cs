@@ -2,6 +2,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
+using System.Security.Cryptography;   // ⭐ YENİ — içerik imzası (SHA-256)
+using System.Text;                    // ⭐ YENİ — UTF-8 baytları
 using ETicaretAPI.Data;
 using ETicaretAPI.Models;
 
@@ -31,6 +33,43 @@ namespace ETicaretAPI.Controllers
         private int GetUserId()
         {
             return int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
+        }
+
+        // ⭐ YENİ — SİPARİŞİN İÇERİK İMZASI
+        //
+        // ⚠️ TARİF HizliSiparis.IcerikImzasi'nda yazılı ve migration'daki
+        // geri doldurma SQL'i BİREBİR aynısını üretiyor. Buradaki
+        // sıralama, ayraç ya da hash değişirse o SQL de değişmeli —
+        // yoksa eski satırlar yeni kayıtlarla çakışmaz ve mükerrer
+        // içerik sessizce geri gelir.
+        //
+        // Girdi: (ürün, adet) çiftleri.
+        private static string ImzaUret(IEnumerable<(int ProductId, int Adet)> kalemler)
+        {
+            // ⚠️ GRUPLAMA ŞART: aynı ürün siparişte iki ayrı kalem
+            // olarak durabiliyor ("siparişi tekrarla" ucu da bu yüzden
+            // grupluyor). Gruplamasaydık {A×1, A×1} ile {A×2} farklı
+            // imza üretirdi — oysa ikisi de aynı sepet.
+            var metin = string.Join("|", kalemler
+                .GroupBy(k => k.ProductId)
+                .OrderBy(g => g.Key)
+                .Select(g => g.Key + "x" + g.Sum(k => k.Adet)));
+
+            var baytlar = Encoding.UTF8.GetBytes(metin);
+
+            // Küçük harf hex — TokenService.Hashle ile aynı biçim.
+            return Convert.ToHexString(SHA256.HashData(baytlar)).ToLowerInvariant();
+        }
+
+        // Siparişin kalemlerinden imzayı üretir.
+        private async Task<string> SiparisImzasiAsync(int orderId)
+        {
+            var kalemler = await _context.OrderItems
+                .Where(oi => oi.OrderId == orderId)
+                .Select(oi => new { oi.ProductId, oi.Quantity })
+                .ToListAsync();
+
+            return ImzaUret(kalemler.Select(k => (k.ProductId, k.Quantity)));
         }
 
         // Listede sipariş başına kaç ürün adı gösterilecek?
@@ -123,10 +162,48 @@ namespace ETicaretAPI.Controllers
                 return NotFound(new { mesaj = "Sipariş bulunamadı!" });
             }
 
+            var imza = await SiparisImzasiAsync(orderId);
+
+            // ⚠️ ÖN KONTROL: aynı İÇERİKTE başka bir kayıt var mı?
+            //
+            // Garanti değil (iki eşzamanlı istek ikisi de "yok"
+            // görebilir) — asıl koruma aşağıdaki benzersiz indeks. Ama
+            // %99 durumu ucuza halleder ve müşteriye hangi siparişin
+            // zaten kayıtlı olduğunu SÖYLEYEBİLİR. İstisna yolundan
+            // gelseydik elimizde o bilgi olmazdı.
+            var mevcut = await _context.HizliSiparisler
+                .Where(h => h.UserId == userId && h.IcerikImzasi == imza)
+                .Join(_context.Orders, h => h.OrderId, o => o.Id, (h, o) => o.OrderNumber)
+                .FirstOrDefaultAsync();
+
+            if (mevcut != null)
+            {
+                // ⚠️ HATA DEĞİL, 200.
+                //
+                // Müşterinin istediği sonuç zaten sağlanmış: bu içerik
+                // hızlı siparişlerinde. Ona kırmızı bir hata göstermek,
+                // olmayan bir sorunu varmış gibi sunmak olurdu.
+                //
+                // kayitli: true → ekrandaki buton "kayıtlı" durumuna
+                // geçiyor; mesaj neden ikinci bir satır eklenmediğini
+                // anlatıyor.
+                return Ok(new
+                {
+                    mesaj = $"Aynı içerikte bir hızlı siparişin zaten var ({mevcut}).",
+                    kayitli = true,
+
+                    // ⚠️ İstemci bu durumu METNE BAKMADAN ayırt edebilsin.
+                    // Mesaj yarın düzeltilirse metne bakan kod kırılırdı;
+                    // kod sabit kalır. (KUPON_GECERSIZ ile aynı gerekçe.)
+                    mevcuttu = true
+                });
+            }
+
             _context.HizliSiparisler.Add(new HizliSiparis
             {
                 UserId = userId,
                 OrderId = orderId,
+                IcerikImzasi = imza,
                 CreatedAt = DateTime.UtcNow
             });
 
@@ -136,17 +213,30 @@ namespace ETicaretAPI.Controllers
             }
             catch (DbUpdateException)
             {
-                // ⚠️ (UserId, OrderId) benzersiz indeksi devreye girdi:
-                // sipariş zaten kayıtlı.
+                // ⚠️ İKİ benzersiz indeksten biri devreye girdi:
+                //   (UserId, OrderId)      → bu sipariş zaten kayıtlı
+                //   (UserId, IcerikImzasi) → bu içerik zaten kayıtlı
                 //
-                // Bu bir HATA DEĞİL. Müşteri açısından sonuç istediği
-                // durum: sipariş listesinde. İki kez basmak ya da iki
-                // cihazdan aynı anda kaydetmek hata mesajı görmemeli.
+                // Hangisi olduğunu ayırt etmiyoruz: müşteri açısından
+                // ikisi de aynı şey — istediği içerik listesinde.
+                //
+                // Bu bir HATA DEĞİL. İki kez basmak ya da iki cihazdan
+                // aynı anda kaydetmek hata mesajı görmemeli.
                 // (İdempotentlik — sipariş oluşturmadaki desenin aynısı.)
-                return Ok(new { mesaj = "Bu sipariş zaten hızlı siparişlerinde.", kayitli = true });
+                return Ok(new
+                {
+                    mesaj = "Bu sipariş zaten hızlı siparişlerinde.",
+                    kayitli = true,
+                    mevcuttu = true
+                });
             }
 
-            return Ok(new { mesaj = "Sipariş hızlı siparişlerine eklendi.", kayitli = true });
+            return Ok(new
+            {
+                mesaj = "Sipariş hızlı siparişlerine eklendi.",
+                kayitli = true,
+                mevcuttu = false
+            });
         }
 
         // 🟡 DELETE /api/hizli-siparisler/5 — kaydı kaldır

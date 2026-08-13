@@ -106,6 +106,15 @@ namespace ETicaretAPI.Controllers
             }
 
             // Zaten favoride mi?
+            //
+            // ⚠️ Bu kontrol GARANTİ DEĞİL (TOCTOU): kontrol ile INSERT
+            // arasında başka bir istek araya girebilir. Asıl koruma
+            // aşağıdaki catch bloğundaki UNIQUE INDEX.
+            //
+            // Peki niye duruyor? %99 durumda hata buradan yakalanır ve
+            // kullanıcı net bir mesaj alır. Exception yolu hem daha
+            // pahalıdır hem de yalnızca nadir yarış durumu içindir.
+            // (Register'daki e-posta kontrolüyle birebir aynı desen.)
             var zatenVar = await _context.Favorites
                 .AnyAsync(f => f.UserId == userId && f.ProductId == productId);
 
@@ -120,7 +129,23 @@ namespace ETicaretAPI.Controllers
                 ProductId = productId
             });
 
-            await _context.SaveChangesAsync();
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch (DbUpdateException)
+            {
+                // ⭐ YENİ — (UserId, ProductId) benzersiz indeksi devreye
+                // girdi: tam bu anda başka bir istek aynı favoriyi ekledi.
+                //
+                // ⚠️ Bu bir HATA DEĞİL, beklenen yarış sonucu. Kullanıcı
+                // açısından sonuç zaten istediği durum: ürün favorilerinde.
+                // İndeks eklenmeden önce bu yarış SESSİZCE mükerrer satır
+                // üretiyordu; şimdi engelleniyor ama kullanıcıya 500
+                // göstermemek için burada karşılanması gerekiyor.
+                return BadRequest(new { mesaj = "Bu ürün zaten favorilerinde!" });
+            }
+
             return Ok(new { mesaj = "Favorilere eklendi biladerim!" });
         }
 

@@ -2164,6 +2164,31 @@ namespace ETicaretAPI.Controllers
             }
 
             _context.ProductImages.RemoveRange(resimler);
+
+            // ⭐ YENİ — ÜRÜNE İŞARET EDEN "NİYET" SATIRLARINI DA TEMİZLE
+            //
+            // ⚠️ Yukarıdaki engel "geçmişi olan ürün silinemez" diyor ve
+            // Favorites/StockAlerts'i bilerek saymıyor (bkz. oradaki
+            // gerekçe: onlar bir işlem değil, bir niyet kaydı). Ama
+            // "silme engeli sayılmıyor" ile "temizlenmiyor" farklı
+            // şeyler — sayılmadıkları için ürün silinebiliyor, sonra da
+            // sahipsiz satır olarak kalıyorlardı.
+            //
+            // ⚠️ EN ZARARLISI CartItems'tı ve sessizdi:
+            //   • CartController.GetCart, Products ile INNER JOIN yapıyor
+            //     → satır sepet ekranından KAYBOLUYOR
+            //   • OrdersController ise sepeti ham CartItems'tan okuyor
+            //     → satırı GÖRÜYOR ve "Ürün bulunamadı (id: N)" deyip
+            //       siparişi reddediyor
+            // Yani müşteri, sepetinde göremediği bir ürün yüzünden
+            // sipariş veremiyor ve sebebini öğrenmesinin hiçbir yolu yok.
+            //
+            // ExecuteDeleteAsync: tek SQL cümlesi, change tracker'a
+            // yüklemeden siler. (Hesap kapatmadaki desenin aynısı.)
+            await _context.CartItems.Where(c => c.ProductId == id).ExecuteDeleteAsync();
+            await _context.Favorites.Where(f => f.ProductId == id).ExecuteDeleteAsync();
+            await _context.StockAlerts.Where(s => s.ProductId == id).ExecuteDeleteAsync();
+
             _context.Products.Remove(product);
 
             await _context.SaveChangesAsync();

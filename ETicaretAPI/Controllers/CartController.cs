@@ -218,9 +218,28 @@ namespace ETicaretAPI.Controllers
             // Tanık yalnızca müşteri ürünü ürün sayfasından TEKRAR
             // eklerken tazeleniyor; orada güncel fiyatı görüp öyle
             // basıyor. Sepetteki adet oynatma böyle bir görme değil.
-            item.Quantity = dto.Quantity;
+
+            // ⭐ YENİ — ÜST SINIR AYARDAN OKUNUYOR.
+            //
+            // ⚠️ Eskiden bu ucun tek koruması CartAddDto'daki
+            // [Range(1, 99)] idi — yani sınır KODA GÖMÜLÜ 99'du.
+            // MagazaAyarlari.SepetMaksAdet 20'ye çekilseydi:
+            //     POST /api/cart  → SepetEkleyici 20'ye kırpar ✓
+            //     PUT  /api/cart  → 99'a kadar kabul eder      ✗
+            // Aynı iş kuralının iki farklı cevabı olurdu.
+            //
+            // DTO'daki [Range] geniş bir güvenlik tavanı olarak duruyor
+            // (saçma büyüklükte istek gövdesini erkenden eler); gerçek
+            // iş kuralı tek yerde, MagazaAyarlari'nda yaşıyor.
+            //
+            // ⚠️ Hata dönmek yerine KIRPMA seçildi: SepetEkleyici de
+            // aynısını yapıyor ve iki ucun aynı girdiye farklı tepki
+            // vermesi (biri kırpar, diğeri reddeder) kullanıcı için
+            // açıklanamaz olurdu.
+            item.Quantity = Math.Min(dto.Quantity, _ayarlar.SepetMaksAdet);
+
             await _context.SaveChangesAsync();
-            return Ok(new { mesaj = "Adet güncellendi!" });
+            return Ok(new { mesaj = "Adet güncellendi!", adet = item.Quantity });
         }
 
         // 🟡 DELETE /api/cart/5 — sepetten çıkar

@@ -28,13 +28,19 @@ namespace ETicaretAPI.Controllers
         private readonly EmailSablonlari _sablonlar;
         private readonly ILogger<AdminReturnsController> _log;
 
+        // ⭐ YENİ — denetim kaydı. Para iadesi bugüne kadar HİÇ kayda
+        // geçmiyordu: gerçek para hareketi yaratan bir işlemin "kim
+        // yaptı" cevabı yoktu.
+        private readonly DenetimKaydi _denetim;
+
         public AdminReturnsController(
             AppDbContext context,
             IadeHesaplayici hesap,
             StokDefteri defter,
             IEmailGonderici email,
             EmailSablonlari sablonlar,
-            ILogger<AdminReturnsController> log)
+            ILogger<AdminReturnsController> log,
+            DenetimKaydi denetim)
         {
             _context = context;
             _hesap = hesap;
@@ -42,6 +48,7 @@ namespace ETicaretAPI.Controllers
             _email = email;
             _sablonlar = sablonlar;
             _log = log;
+            _denetim = denetim;
         }
 
         private int GetUserId()
@@ -67,6 +74,23 @@ namespace ETicaretAPI.Controllers
             return GecerliGecisler.TryGetValue(mevcut, out var izinliler)
                 && izinliler.Contains(yeni);
         }
+
+        // ⭐ YENİ — "para iadesine hangi durumdan geçilebilir?"
+        //
+        // ⚠️ Elle `IadeDurumu.TeslimAlindi` yazmak yerine durum
+        // makinesinden TÜRETİYORUZ. Sebep: bu liste aşağıdaki atomik
+        // UPDATE'in WHERE koşuluna giriyor. Elle yazsaydık kural iki
+        // yerde yaşardı ve yarın geçiş tablosu değiştiğinde biri
+        // güncellenip diğeri sessizce eski kalırdı — üstelik en kötü
+        // yerde: para ödeyen sorgunun koşulunda.
+        //
+        // ⚠️ Bildirim sırası önemli: GecerliGecisler'den SONRA
+        // gelmeli, statik alanlar yazıldıkları sırayla ilklenir.
+        private static readonly string[] ParaIadesineGecebilenDurumlar =
+            GecerliGecisler
+                .Where(x => x.Value.Contains(IadeDurumu.ParaIadeEdildi))
+                .Select(x => x.Key)
+                .ToArray();
 
         // 🔴 GET /api/admin/iadeler?durum=talep_edildi&sayfa=1
         [HttpGet]
@@ -244,17 +268,46 @@ namespace ETicaretAPI.Controllers
 
         // 🔴 POST /api/admin/iadeler/5/para-iadesi
         // PUT değil POST: idempotent değil, para hareketi yaratıyor.
-        // İkinci çağrıyı durum makinesi reddediyor.
+        //
+        // ⭐ DEĞİŞTİ — durum geçişi artık ATOMİK.
+        //
+        // ⚠️ ESKİ KOD YARIŞ KOŞULUNA AÇIKTI:
+        //       var talep = ...FirstOrDefaultAsync(...);   // OKU
+        //       if (!GecisGecerliMi(talep.Durum, ...)) ... // KONTROL
+        //       ... transaction ... talep.Durum = ...      // YAZ
+        //
+        //   Üstteki yorumda "ikinci çağrıyı durum makinesi reddediyor"
+        //   yazıyordu ve bu SIRALI ikinci çağrı için doğruydu;
+        //   EŞZAMANLI ikinci çağrı için değildi. İki istek aynı anda
+        //   gelirse ikisi de "teslim_alindi" okur, ikisi de kontrolü
+        //   geçer ve ikisi de para öder: iki `Payment("iade")` satırı,
+        //   iki kez stok girişi. Ödemeler raporundaki iade toplamı
+        //   ikiye katlanır.
+        //
+        //   Çözüm stok ve kupon sayacındaki desenin aynısı: kontrol ve
+        //   yazma TEK cümlede, satır kilidi altında (bkz.
+        //   OrdersController — kupon satırı MUTEX olarak kullanılıyor).
         [HttpPost("{id}/para-iadesi")]
         public async Task<IActionResult> ParaIadesi(int id)
         {
-            var talep = await _context.ReturnRequests.FirstOrDefaultAsync(r => r.Id == id);
+            // ⚠️ AsNoTracking — bu nesneyi EF'in takip etmesini
+            // İSTEMİYORUZ. Durumu aşağıda ExecuteUpdateAsync ile
+            // yazacağız; takip edilseydi SaveChanges aynı kolonlara
+            // ikinci bir UPDATE daha gönderirdi.
+            // ("ExecuteUpdate ile yazdığın kolona bellekte dokunma"
+            //  kuralının bu metottaki karşılığı.)
+            var talep = await _context.ReturnRequests
+                .AsNoTracking()
+                .FirstOrDefaultAsync(r => r.Id == id);
 
             if (talep == null)
             {
                 return NotFound(new { mesaj = "İade talebi bulunamadı!" });
             }
 
+            // ⚠️ Bu kontrol GARANTİ DEĞİL, sadece ucuz durumu ucuza
+            // halleder ve anlaşılır bir mesaj verir. Bağlayıcı kontrol
+            // aşağıdaki atomik UPDATE'in WHERE koşulu.
             if (!GecisGecerliMi(talep.Durum, IadeDurumu.ParaIadeEdildi))
             {
                 return BadRequest(new
@@ -284,6 +337,7 @@ namespace ETicaretAPI.Controllers
                 talep.OrderItemId.HasValue ? kalemler.FirstOrDefault() : null);
 
             var adminId = GetUserId();
+            var paraIadeTarihi = DateTime.UtcNow;
 
             // ⚠️ Stok + para + sipariş durumu tek transaction'da:
             // biri olup diğeri olmazsa kasa ile raf tutmaz.
@@ -291,6 +345,46 @@ namespace ETicaretAPI.Controllers
 
             try
             {
+                // ---- 0) DURUMU ATOMİK OLARAK TÜKET ----
+                //
+                // Ürettiği SQL:
+                //     UPDATE ReturnRequests
+                //     SET Durum = 'para_iade_edildi', IadeTutari = @t,
+                //         ParaIadeTarihi = @tarih
+                //     WHERE Id = @id AND Durum IN ('teslim_alindi')
+                //
+                // ⚠️ BU BLOK TRANSACTION'IN İLK İŞLEMİ OLMAK ZORUNDA.
+                // Talep satırına exclusive kilit koyuyor ve kilit
+                // COMMIT'e kadar duruyor; aynı talebe gelen ikinci
+                // istek tam burada kuyruğa giriyor. Stoktan sonra
+                // yapsaydık rakip istek stoğu çoktan iki kez artırmış
+                // olurdu.
+                //
+                // ⚠️ Tutar da BURADA yazılıyor: "para ödendi" ile
+                // "ne kadar ödendi" tek atomik adımda kayda geçmeli,
+                // yoksa arada çöken bir istek tutarsız satır bırakır.
+                var etkilenen = await _context.ReturnRequests
+                    .Where(r => r.Id == id
+                             && ParaIadesineGecebilenDurumlar.Contains(r.Durum))
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(r => r.Durum, IadeDurumu.ParaIadeEdildi)
+                        .SetProperty(r => r.IadeTutari, tutar)
+                        .SetProperty(r => r.ParaIadeTarihi, paraIadeTarihi));
+
+                if (etkilenen == 0)
+                {
+                    // Koşul tutmadı → rakip bir istek bizden önce
+                    // ödemeyi yaptı (ya da talep bu arada reddedildi).
+                    // Rollback'i açıkça çağırıyoruz ki kilitler metot
+                    // bitmesini beklemeden serbest kalsın.
+                    await tx.RollbackAsync();
+
+                    return BadRequest(new
+                    {
+                        mesaj = "Bu iadenin parası zaten ödenmiş görünüyor. Sayfayı yenile."
+                    });
+                }
+
                 // ---- 1) STOK GERİ ----
                 foreach (var kalem in kalemler)
                 {
@@ -330,7 +424,12 @@ namespace ETicaretAPI.Controllers
                     Amount = tutar,
                     CardLast4 = siparis.CardLast4,   // hangi karta iade edildi
                     Status = "iade",
-                    PaidAt = DateTime.UtcNow
+
+                    // ⚠️ Yukarıdaki ParaIadeTarihi ile AYNI değişken.
+                    // İki kez DateTime.UtcNow çağırsaydık ödeme satırı
+                    // ile iade kaydı milisaniye farkla ayrışırdı ve
+                    // "aynı işlem mi?" sorusu tarihten cevaplanamazdı.
+                    PaidAt = paraIadeTarihi
                 });
 
                 // ---- 3) SİPARİŞİN ÖDEME DURUMU ----
@@ -344,9 +443,30 @@ namespace ETicaretAPI.Controllers
                 // teslim edilmiş kalır, iade sonraki bir olay.
                 // ⚠️ Kupon UsedCount azalmıyor (karar #6).
 
-                talep.Durum = IadeDurumu.ParaIadeEdildi;
-                talep.IadeTutari = tutar;   // ⚠️ tutar DONUYOR
-                talep.ParaIadeTarihi = DateTime.UtcNow;
+                // ⚠️ talep.Durum / IadeTutari / ParaIadeTarihi BURADA
+                // YAZILMIYOR — üçü de yukarıdaki atomik UPDATE'te
+                // yazıldı. Burada tekrar atasaydık ya ikinci bir UPDATE
+                // giderdi ya da (AsNoTracking olduğu için) hiç
+                // gitmezdi; ikisi de okuyanı yanıltırdı.
+
+                // ---- 4) DENETİM KAYDI ----
+                //
+                // ⚠️ Para hareketi yaratan bir işlem iz bırakmadan
+                // olmamalı. Yorum gizlemek için tutulan kaydın çok daha
+                // fazlası burada gerekli: bu işlem müşterinin hesabına
+                // para gönderiyor.
+                //
+                // ⚠️ AYNI TRANSACTION'DA, aşağıdaki SaveChanges ile
+                // birlikte yazılıyor. Ayrı kaydetseydik iade geri
+                // alındığında "para iade edildi" diyen sahipsiz bir
+                // denetim satırı kalırdı.
+                await _denetim.EkleAsync(
+                    yapanId: adminId,
+                    hedefId: siparis.UserId,
+                    hedefAd: $"Sipariş {siparis.OrderNumber}",
+                    islem: DenetimIslemi.ParaIadesi,
+                    eski: talep.Durum,
+                    yeni: $"{tutar:N2} TL iade edildi (talep #{talep.Id})");
 
                 await _context.SaveChangesAsync();
                 await tx.CommitAsync();
@@ -356,6 +476,16 @@ namespace ETicaretAPI.Controllers
                 await tx.RollbackAsync();
                 throw;   // global middleware yakalar
             }
+
+            // ⚠️ Bellekteki kopyayı ŞİMDİ güncelliyoruz.
+            //
+            // talep AsNoTracking ile okundu, yani bu atamalar hiçbir
+            // SQL üretmiyor — sadece aşağıdaki mail şablonu ve cevap
+            // doğru değerleri görsün diye. Yapmasaydık müşteriye
+            // "iaden teslim alındı" maili giderdi; oysa parası ödendi.
+            talep.Durum = IadeDurumu.ParaIadeEdildi;
+            talep.IadeTutari = tutar;
+            talep.ParaIadeTarihi = paraIadeTarihi;
 
             await KararMailiGonderAsync(talep);
 

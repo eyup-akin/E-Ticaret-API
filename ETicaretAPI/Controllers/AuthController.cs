@@ -51,18 +51,29 @@ namespace ETicaretAPI.Controllers
         // ⭐ YENİ (Aşama 10) — sözleşme onaylarını yazan ortak servis
         private readonly ETicaretAPI.Services.SozlesmeOnayServisi _onayServisi;
 
+        // ⭐ YENİ — hata kaydı için.
+        //
+        // Neden gerekti? HesabimiSil'deki catch bloğu istisnayı
+        // yakalayıp kendi cevabını döndürüyor, yani global
+        // HataYakalamaMiddleware'e HİÇ ulaşmıyor. Middleware log'lamayı
+        // orada yaptığı için, o dal boyunca hata hiçbir yere
+        // yazılmıyordu. Yakalayan, log'lamaktan da sorumludur.
+        private readonly ILogger<AuthController> _log;
+
         public AuthController(
             AppDbContext context,
             ETicaretAPI.Services.TokenService tokenService,
             ETicaretAPI.Services.IEmailGonderici email,   // ⭐ YENİ
             IConfiguration config,                        // ⭐ YENİ
-            ETicaretAPI.Services.SozlesmeOnayServisi onayServisi)   // ⭐ YENİ (Aşama 10)
+            ETicaretAPI.Services.SozlesmeOnayServisi onayServisi,   // ⭐ YENİ (Aşama 10)
+            ILogger<AuthController> log)                  // ⭐ YENİ
         {
             _context = context;
             _tokenService = tokenService;
             _email = email;     // ⭐ YENİ
             _config = config;   // ⭐ YENİ
             _onayServisi = onayServisi;
+            _log = log;         // ⭐ YENİ
         }
 
         // POST /api/auth/register
@@ -309,12 +320,16 @@ namespace ETicaretAPI.Controllers
         [HttpPost("reset-password")]
         public async Task<IActionResult> ResetPassword([FromBody] SifreYenileDto dto)
         {
-            if (string.IsNullOrWhiteSpace(dto.Token) || string.IsNullOrWhiteSpace(dto.YeniSifre))
-                return BadRequest(new { mesaj = "Token ve yeni şifre gerekli." });
-
-            if (dto.YeniSifre.Length < 6)
-                return BadRequest(new { mesaj = "Şifre en az 6 karakter olmalı biladerim!" });
-
+            // ⭐ DEĞİŞTİ — elle yazılmış iki kontrol kaldırıldı.
+            //
+            // Token varlığı ve şifre uzunluğu artık SifreYenileDto'daki
+            // özniteliklerde ([Required] + [SifreGuclu]). [ApiController]
+            // onları otomatik yakalıyor ve diğer tüm doğrulama
+            // hatalarıyla AYNI zarfla döndürüyor.
+            //
+            // Eskiden uzunluk kuralı burada ve SifreDegistirDto'da ayrı
+            // ayrı yazılıydı; kayıtta ise hiç yoktu. Üç kopya tek
+            // kaynağa toplandı.
             var hash = _tokenService.Hashle(dto.Token);
             var kullanici = await _context.Users
                 .FirstOrDefaultAsync(u => u.SifreSifirlamaTokenHash == hash);
@@ -581,6 +596,11 @@ namespace ETicaretAPI.Controllers
             // Damga JWT'nin içinde "stamp" claim'i olarak taşınıyor.
             // GuvenlikDamgasiMiddleware her istekte token'daki damgayı
             // veritabanındakiyle karşılaştırıyor.
+            //
+            // ⚠️ BU CÜMLE MIDDLEWARE PIPELINE'DA AÇIK OLDUĞU SÜRECE
+            // DOĞRU (Program.cs). Middleware bir kez kapatıldı ve o
+            // dönemde buradaki "anında geçersizleşir" iddiası sessizce
+            // yalan oldu — damga yenileniyor ama kimse bakmıyordu.
             //
             // Damgayı değiştirince ELDEKİ TÜM access token'lar anında
             // geçersizleşir — 15 dakika beklemeye gerek kalmaz.
@@ -859,6 +879,11 @@ namespace ETicaretAPI.Controllers
                 // Damgayı yenile → eldeki tüm access token'lar anında ölür.
                 // Adım 6'da refresh token'ları sildik, burada access'leri
                 // öldürüyoruz. İkisi birlikte tam çıkış demek.
+                //
+                // ⚠️ "Anında" GuvenlikDamgasiMiddleware sayesinde
+                // (Program.cs). Middleware kapalıyken kapatılmış hesabın
+                // token'ı 15 dakika daha çalışıyordu — KVKK açısından
+                // en can sıkıcı dal buydu.
                 kullanici.SecurityStamp = Guid.NewGuid().ToString();
 
                 // Bekleyen doğrulama/sıfırlama linklerini iptal et.
@@ -880,10 +905,23 @@ namespace ETicaretAPI.Controllers
             {
                 await transaction.RollbackAsync();
 
+                // ⭐ DEĞİŞTİ — ex.Message ARTIK İSTEMCİYE GİTMİYOR.
+                //
+                // ⚠️ Bu catch, global HataYakalamaMiddleware'i atlıyor;
+                // middleware ise hata detayını yalnızca Development'ta
+                // gösterip canlıda gizliyor. Buradaki `hata = ex.Message`
+                // o korumayı devre dışı bırakıyor ve veritabanı şemasını
+                // (tablo/kolon/kısıt adları) dışarı sızdırıyordu.
+                //
+                // ⚠️ Mesajın kendisi KALIYOR: "hiçbir değişiklik
+                // yapılmadı" cümlesi kullanıcı için gerçek bir bilgi —
+                // hesabının yarı silinmiş olmadığını söylüyor.
+                // Middleware'in genel mesajı bunu veremezdi.
+                _log.LogError(ex, "Hesap kapatılamadı. userId: {UserId}", userId);
+
                 return StatusCode(500, new
                 {
-                    mesaj = "Hesap kapatılırken hata oldu, hiçbir değişiklik yapılmadı.",
-                    hata = ex.Message
+                    mesaj = "Hesap kapatılırken hata oldu, hiçbir değişiklik yapılmadı."
                 });
             }
 
@@ -1080,9 +1118,6 @@ namespace ETicaretAPI.Controllers
 
         // ---------- YARDIMCILAR ----------
 
-        // Yeni refresh üretir, hash'ini DB'ye yazar, HAM hâlini döndürür (istemciye o gider).
-
-
         // Tarayıcıda açılan doğrulama linki için basit bir HTML sayfası üretir.
         //
         // Neden ayrı metot? Dört farklı sonuç (geçersiz / süresi dolmuş /
@@ -1158,12 +1193,7 @@ namespace ETicaretAPI.Controllers
         //  ADMİN BAŞVURUSU
         // ==========================================================
 
-        // Reddedilen kişi ne kadar bekleyecek?
-        // Sabit olarak duruyor: "30" sayısını koda serpiştirseydik
-        // yarın 60 yapmak istediğimizde birini atlardık.
-        //private const int RedSonrasiBeklemeGunu = 30;
-
-        // ⭐ DEĞİŞTİ — bekleme süresi artık ayardan geliyor.
+        // ⭐ Reddedilen kişi ne kadar bekleyecek? Bekleme süresi ayardan geliyor.
         //
         // Neden const değil property?
         // const derleme zamanında sabitlenir; ayar ise çalışma

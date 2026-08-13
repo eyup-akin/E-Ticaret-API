@@ -135,7 +135,6 @@ namespace ETicaretAPI.Controllers
                     : ClosedXML.Excel.XLColor.LightGray;
             }
 
-            // 👇👇👇 RESİMDEN GELEN KOD BURAYA EKLENDİ 👇👇👇
             // Barkod sütununun TAMAMINI metin formatına al (başlık hariç aşağısı).
             // Kullanıcı yeni satır eklediğinde de barkodu Excel bozmasın.
             var barkodIndex = System.Array.FindIndex(
@@ -145,7 +144,6 @@ namespace ETicaretAPI.Controllers
             {
                 ws.Column(barkodIndex + 1).Style.NumberFormat.Format = "@";
             }
-            // 👆👆👆 YENİ KODUN BİTİŞİ 👆👆👆
 
             // Örnek dolu satır (2. satır) — kullanıcı formatı görsün
             for (int i = 0; i < UrunKolonlari.Hepsi.Length; i++)

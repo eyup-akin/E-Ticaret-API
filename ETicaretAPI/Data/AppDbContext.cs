@@ -792,6 +792,113 @@ namespace ETicaretAPI.Data
                 .Property(o => o.CustomerNote)
                 .HasMaxLength(500);
 
+
+            // ⭐ YENİ — YORUM METNİ UZUNLUK SINIRI
+            //
+            // Bu kolon tek istisnaydı: projedeki diğer bütün metin
+            // alanlarına sınır konmuş (ProductName 200, Description 2000,
+            // SupportMessage.Mesaj 2000, CustomerNote 500...), Comment ise
+            // nvarchar(max) olarak kalmıştı.
+            //
+            // ⚠️ 1000, ReviewCreateDto'daki [StringLength(1000)] ile AYNI
+            // sayı olmak zorunda. Farklı olsalardı ya DTO gereksiz yere
+            // reddederdi ya da veritabanı ham bir istisna fırlatırdı.
+            modelBuilder.Entity<Review>()
+                .Property(r => r.Comment)
+                .HasMaxLength(1000);
+
+
+            // ============================================================
+            //  ⭐ YENİ — EKSİK İNDEKSLER
+            //
+            //  ⚠️ NEDEN TOPLU BİR BLOK?
+            //
+            //  Yeni tablolarda (StockMovements, SupportTickets,
+            //  ReturnRequests, Phones...) indeksler kolon sırasına kadar
+            //  düşünülmüştü. Eski tablolar ise hiç gözden geçirilmemişti:
+            //  OrderItems, Payments, ProductImages, Favorites, Addresses,
+            //  Cards ve AuditLogs'ta HİÇ indeks yoktu.
+            //
+            //  ⚠️ FK ≠ İNDEKS. Yaygın bir yanılgı: SQL Server yabancı
+            //  anahtar tanımlayınca o kolona otomatik indeks KURMAZ.
+            //  Bu projede FK'ların çoğu zaten yok, indeksleri de yoktu.
+            //
+            //  KOLON SIRASI İLKESİ (bu dosyada zaten uygulanıyor):
+            //  önce EŞİTLİK filtresi, sonra SIRALAMA. Ters sırada olsaydı
+            //  SQL Server tabloyu tarayıp sonra filtrelerdi.
+            // ============================================================
+
+            // ⚠️ EN SICAK İNDEKS. OrderItems bu sistemin en çok
+            // sorgulanan tablosu: sipariş detayı, mail kalemleri,
+            // raporlar, "siparişi tekrarla", yorum uygunluğu, ürün
+            // silinebilirliği ve iade akışı hep OrderId ile filtreliyor.
+            // İndeks yokken hepsi tam tablo taramasıydı.
+            modelBuilder.Entity<OrderItem>()
+                .HasIndex(oi => oi.OrderId);
+
+            // "Bu ürün hangi siparişlerde geçti?" — satış raporu,
+            // popülerlik sıralaması ve silinebilirlik kontrolü.
+            modelBuilder.Entity<OrderItem>()
+                .HasIndex(oi => oi.ProductId);
+
+            // ⚠️ "Siparişlerim" ekranı BUNSUZ tam tarama yapıyordu.
+            //
+            // Orders'ta UserId geçen tek indeks (UserId, IdempotencyKey)
+            // ama o FİLTRELİ (IdempotencyKey IS NOT NULL). SQL Server
+            // filtreli bir indeksi, filtre kolonunu içermeyen bir sorgu
+            // için kullanamaz — yani o indeks buraya hiç yardım etmiyordu.
+            //
+            // CreatedAt ikinci kolon çünkü liste tarihe göre sıralanıyor.
+            modelBuilder.Entity<Order>()
+                .HasIndex(o => new { o.UserId, o.CreatedAt });
+
+            // Sipariş detayı ve iptal akışı ödemeleri OrderId ile çekiyor.
+            modelBuilder.Entity<Payment>()
+                .HasIndex(p => p.OrderId);
+
+            // "Ödemelerim" listesi: kendi ödemeleri, tarihe göre sıralı.
+            modelBuilder.Entity<Payment>()
+                .HasIndex(p => new { p.UserId, p.PaidAt });
+
+            // ⚠️ HER ÜRÜN LİSTESİNDE VE HER SEPET GÖRÜNTÜLEMESİNDE
+            // çalışan sorgu. Üç kolon da sorgunun kendisinden geliyor:
+            // ProductId ile filtrele, IsMain azalan + SortOrder artan
+            // sırala. Üçü indekste olunca SQL Server ayrıca sıralama
+            // yapmak zorunda kalmıyor.
+            modelBuilder.Entity<ProductImage>()
+                .HasIndex(pi => new { pi.ProductId, pi.IsMain, pi.SortOrder });
+
+            // ⚠️ BENZERSİZ — hem indeks hem YARIŞ KORUMASI.
+            //
+            // FavoritesController "önce sorgula, yoksa ekle" yapıyordu;
+            // iki eşzamanlı istek ikisi de "yok" görüp iki satır
+            // ekleyebilirdi. CartItems, StockAlerts ve Phones'ta alınan
+            // dersin aynısı: garantiyi kod değil veritabanı verir.
+            //
+            // ⚠️ Benzersiz yapmadan önce mevcut mükerrer satırlar
+            // tarandı (0 çıktı). Mükerrer olsaydı migration patlardı.
+            modelBuilder.Entity<Favorite>()
+                .HasIndex(f => new { f.UserId, f.ProductId })
+                .IsUnique();
+
+            // Adres ve kart listeleri kullanıcı bazında çekiliyor;
+            // ayrıca sipariş akışı ikisini de sahiplik kontrolüyle
+            // sorguluyor.
+            modelBuilder.Entity<Address>()
+                .HasIndex(a => a.UserId);
+
+            modelBuilder.Entity<Card>()
+                .HasIndex(c => c.UserId);
+
+            // Kategori filtresi — mobil kategori ekranının ana sorgusu.
+            modelBuilder.Entity<Product>()
+                .HasIndex(p => p.CategoryId);
+
+            // Denetim kaydı sayfası tarih aralığına göre süzüp
+            // tarihe göre sıralıyor.
+            modelBuilder.Entity<AuditLog>()
+                .HasIndex(l => l.CreatedAt);
+
         }
     }
 }

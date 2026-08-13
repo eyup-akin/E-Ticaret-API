@@ -28,13 +28,20 @@ namespace ETicaretAPI.Controllers
         // ⭐ YENİ — ayarlardan geliyor, artık koda gömülü değil.
         private readonly ETicaretAPI.Services.MagazaAyarlari _ayarlar;
 
+        // ⭐ YENİ — denetim kaydı artık ortak serviste.
+        // Eskiden bu sınıfın private LogEkle metoduydu; para iadesi ve
+        // admin sipariş iptali ona erişemediği için hiç kayıt
+        // tutamıyorlardı.
+        private readonly ETicaretAPI.Services.DenetimKaydi _denetim;
+
         public AdminController(
             AppDbContext context,
             ETicaretAPI.Services.RaporTarihi tarih,
             ETicaretAPI.Services.IEmailGonderici email,          // ⭐ YENİ
             ETicaretAPI.Services.EmailSablonlari sablonlar,      // ⭐ YENİ
             ILogger<AdminController> log,                        // ⭐ YENİ
-            ETicaretAPI.Services.MagazaAyarlari ayarlar)         // ⭐ YENİ
+            ETicaretAPI.Services.MagazaAyarlari ayarlar,         // ⭐ YENİ
+            ETicaretAPI.Services.DenetimKaydi denetim)           // ⭐ YENİ
         {
             _context = context;
             _tarih = tarih;
@@ -42,6 +49,7 @@ namespace ETicaretAPI.Controllers
             _sablonlar = sablonlar;                               // ⭐ YENİ
             _log = log;                                           // ⭐ YENİ
             _ayarlar = ayarlar;                                   // ⭐ YENİ
+            _denetim = denetim;                                   // ⭐ YENİ
         }
 
         // 🔴 GET /api/admin/users
@@ -954,27 +962,17 @@ namespace ETicaretAPI.Controllers
             return int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
         }
 
-        // Log kaydı oluştur (kaydetmez, sadece ekler — SaveChanges çağıran sorumlu)
-        private async Task LogEkle(int hedefId, string hedefAd, string islem, string? eski, string? yeni)
+        // ⭐ DEĞİŞTİ — gövde Services/DenetimKaydi.cs'e taşındı.
+        //
+        // Bu metot yalnızca bir KISAYOL olarak duruyor: bu sınıftaki
+        // dört çağrı yeri "işlemi yapan" olarak hep token'daki kullanıcıyı
+        // veriyor, o parametreyi her seferinde yazmanın anlamı yok.
+        //
+        // ⚠️ SaveChanges ÇAĞIRMIYOR — servis de çağırmıyor. Kayıt,
+        // tetikleyen işlemle aynı SaveChanges'te yazılmalı.
+        private Task LogEkle(int hedefId, string hedefAd, string islem, string? eski, string? yeni)
         {
-            var yapanId = IstekYapanId();
-
-            var yapan = await _context.Users
-                .Where(u => u.Id == yapanId)
-                .Select(u => u.FullName)
-                .FirstOrDefaultAsync() ?? "Bilinmeyen";
-
-            _context.AuditLogs.Add(new Models.AuditLog
-            {
-                ActorUserId = yapanId,
-                ActorName = yapan,
-                TargetUserId = hedefId,
-                TargetName = hedefAd,
-                Action = islem,
-                OldValue = eski,
-                NewValue = yeni,
-                CreatedAt = DateTime.UtcNow
-            });
+            return _denetim.EkleAsync(IstekYapanId(), hedefId, hedefAd, islem, eski, yeni);
         }
 
 
@@ -1011,6 +1009,10 @@ namespace ETicaretAPI.Controllers
             user.Role = yeniRol;
 
             // Damgayı yenile — elindeki TÜM access token'lar geçersiz.
+            //
+            // ⚠️ Bunu GuvenlikDamgasiMiddleware sağlıyor (Program.cs).
+            // Middleware kapalıyken rolü düşürülen admin, elindeki
+            // token'la 15 dakika daha admin uçlarına girebiliyordu.
             user.SecurityStamp = Guid.NewGuid().ToString();
 
             // ⭐ Refresh token'ları da iptal et.
@@ -1084,7 +1086,7 @@ namespace ETicaretAPI.Controllers
             }
 
             // ⭐ DEĞİŞTİ — dört adım artık ortak metotta.
-            await RolDegistirAsync(user, yeniRol, "rol_degisti");
+            await RolDegistirAsync(user, yeniRol, DenetimIslemi.RolDegisti);
 
             await _context.SaveChangesAsync();
 
@@ -1132,7 +1134,12 @@ namespace ETicaretAPI.Controllers
 
             user.IsActive = dto.IsActive;
 
-            // Pasifleştirirken damgayı yenile → anında sistemden atılır
+            // Pasifleştirirken damgayı yenile → anında sistemden atılır.
+            //
+            // ⚠️ "Anında" olması GuvenlikDamgasiMiddleware'e bağlı
+            // (Program.cs). Middleware ayrıca IsActive'i de kontrol
+            // ediyor, yani bu kullanıcı damga eşleşse bile misafire
+            // düşer — iki kapı birden.
             if (!dto.IsActive)
             {
                 user.SecurityStamp = Guid.NewGuid().ToString();
@@ -1141,7 +1148,7 @@ namespace ETicaretAPI.Controllers
             await LogEkle(
                 user.Id,
                 user.FullName,
-                dto.IsActive ? "aktiflestirildi" : "pasiflestirildi",
+                dto.IsActive ? DenetimIslemi.Aktiflestirildi : DenetimIslemi.Pasiflestirildi,
                 eski,
                 yeni);
 
@@ -1308,7 +1315,7 @@ namespace ETicaretAPI.Controllers
             }
 
             // Dört adım tek çağrıda: rol + damga + token iptali + log
-            await RolDegistirAsync(kullanici, "admin", "basvuru_onaylandi");
+            await RolDegistirAsync(kullanici, "admin", DenetimIslemi.BasvuruOnaylandi);
 
             basvuru.Durum = BasvuruDurumu.Onaylandi;
             basvuru.KararVerenUserId = IstekYapanId();
@@ -1380,7 +1387,7 @@ namespace ETicaretAPI.Controllers
             await LogEkle(
                 basvuru.UserId,
                 kullanici?.FullName ?? "Bilinmeyen",
-                "basvuru_reddedildi",
+                DenetimIslemi.BasvuruReddedildi,
                 BasvuruDurumu.Beklemede,
                 BasvuruDurumu.Reddedildi);
 

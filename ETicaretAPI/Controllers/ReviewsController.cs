@@ -16,9 +16,15 @@ namespace ETicaretAPI.Controllers
     {
         private readonly AppDbContext _context;
 
-        public ReviewsController(AppDbContext context)
+        // ⭐ YENİ — denetim kaydı ortak servisten.
+        // Eskiden AuditLogs.Add(...) burada elle yazılıydı; aynı kod
+        // AdminController ve SozlesmelerController'da da vardı.
+        private readonly DenetimKaydi _denetim;
+
+        public ReviewsController(AppDbContext context, DenetimKaydi denetim)
         {
             _context = context;
+            _denetim = denetim;
         }
 
         private int GetUserId()
@@ -150,26 +156,19 @@ namespace ETicaretAPI.Controllers
                 return NotFound(new { mesaj = "Ürün bulunamadı biladerim!" });
             }
 
-            // 2) Puan 1-5 arası mı?
-            if (dto.Rating < 1 || dto.Rating > 5)
-            {
-                return BadRequest(new { mesaj = "Puan 1 ile 5 arasında olmalı!" });
-            }
+            // ⭐ DEĞİŞTİ — puan aralığı ve boş yorum kontrolleri kalktı.
+            // İkisi de artık ReviewCreateDto'da öznitelik olarak duruyor
+            // ve [ApiController] onları bu metoda hiç girmeden eliyor.
+            // Burada yalnızca VERİTABANI bilgisi gerektiren kurallar var.
 
-            // 3) Yorum boş mu?
-            if (string.IsNullOrWhiteSpace(dto.Comment))
-            {
-                return BadRequest(new { mesaj = "Yorum boş olamaz!" });
-            }
-
-            // 4) UYGUNLUK — bu ürünü içeren, TESLİM EDİLMİŞ siparişi var mı?
+            // 2) UYGUNLUK — bu ürünü içeren, TESLİM EDİLMİŞ siparişi var mı?
             var teslimAlindi = await TeslimAlindiMi(userId, productId);
             if (!teslimAlindi)
             {
                 return BadRequest(new { mesaj = "Sadece teslim aldığın ürünlere yorum yapabilirsin." });
             }
 
-            // 5) Daha önce yorum yapmış mı? (tek yorum kuralı — DB'de de unique index var)
+            // 3) Daha önce yorum yapmış mı? (tek yorum kuralı — DB'de de unique index var)
             var zatenVar = await _context.Reviews
                 .AnyAsync(r => r.ProductId == productId && r.UserId == userId);
             if (zatenVar)
@@ -292,32 +291,25 @@ namespace ETicaretAPI.Controllers
             // ⚠️ TargetUserId burada yorumu YAZAN kişi. AuditLog
             // "kim kime ne yaptı" tablosu; burada işlem yorum üzerinden
             // ama etkilenen kişi yorum sahibi.
-            var adminId = GetUserId();
-
-            var admin = await _context.Users
-                .Where(u => u.Id == adminId)
-                .Select(u => u.FullName)
-                .FirstOrDefaultAsync() ?? "Bilinmiyor";
-
             var yorumSahibi = await _context.Users
                 .Where(u => u.Id == yorum.UserId)
                 .Select(u => u.FullName)
                 .FirstOrDefaultAsync() ?? "Bilinmiyor";
 
-            _context.AuditLogs.Add(new AuditLog
-            {
-                ActorUserId = adminId,
-                ActorName = admin,
-                TargetUserId = yorum.UserId,
-                TargetName = yorumSahibi,
-                Action = gizle ? "yorum_gizlendi" : "yorum_gosterildi",
+            // ⭐ DEĞİŞTİ — elle AuditLogs.Add yerine ortak servis.
+            // Yapanın adını servis kendisi okuyor; burada yalnızca
+            // HEDEF bilgisi hazırlanıyor.
+            await _denetim.EkleAsync(
+                yapanId: GetUserId(),
+                hedefId: yorum.UserId,
+                hedefAd: yorumSahibi,
+                islem: gizle ? DenetimIslemi.YorumGizlendi : DenetimIslemi.YorumGosterildi,
 
                 // Eski/yeni değer alanlarına yorumun kimliğini yazıyoruz.
                 // Denetim ekranında "hangi yorum" sorusunun cevabı
                 // olmadan kayıt işe yaramaz.
-                OldValue = $"Yorum #{yorum.Id} ({yorum.Rating} yıldız) - gizli: {!gizle}",
-                NewValue = $"Yorum #{yorum.Id} ({yorum.Rating} yıldız) - gizli: {gizle}"
-            });
+                eski: $"Yorum #{yorum.Id} ({yorum.Rating} yıldız) - gizli: {!gizle}",
+                yeni: $"Yorum #{yorum.Id} ({yorum.Rating} yıldız) - gizli: {gizle}");
 
             // Tek SaveChanges: yorum güncellemesi ve denetim kaydı
             // aynı işlemde yazılır. Ayrı ayrı kaydetseydik ikincisi

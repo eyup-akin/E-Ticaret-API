@@ -64,6 +64,10 @@ namespace ETicaretAPI.Controllers
         // koşulu koruması ve adet üst sınırı orada yaşıyor.
         private readonly SepetEkleyici _ekleyici;
 
+        // ⭐ YENİ — denetim kaydı. Admin sipariş iptali hem stoğu hem
+        // ödemeyi değiştiriyor ama hiç iz bırakmıyordu.
+        private readonly DenetimKaydi _denetim;
+
         public OrdersController(
             AppDbContext context,
             IConfiguration config,
@@ -77,6 +81,7 @@ namespace ETicaretAPI.Controllers
             SozlesmeOnayServisi onaylar,                  // ⭐ YENİ (Aşama 10)
             KombinServisi kombin,                         // ⭐ YENİ
             SepetEkleyici ekleyici,                       // ⭐ YENİ
+            DenetimKaydi denetim,                         // ⭐ YENİ
             ILogger<OrdersController> log)                // ⭐ YENİ
         {
             _context = context;
@@ -92,6 +97,7 @@ namespace ETicaretAPI.Controllers
             _onaylar = onaylar;                           // ⭐ YENİ
             _kombin = kombin;                             // ⭐ YENİ
             _ekleyici = ekleyici;                         // ⭐ YENİ
+            _denetim = denetim;                           // ⭐ YENİ
         }
 
 
@@ -742,7 +748,6 @@ namespace ETicaretAPI.Controllers
                     // yazılırdı. Sonra 5c bunu düzeltirdi, ama kuponsuz
                     // siparişlerde bu satır hiç çalışmadığı için
                     // davranış farkı gizli kalırdı.
-                    // toplamTutar = araToplam - indirimTutari;
 
 
                     // ---- ADIM 2: TOPLAM LİMİTİ ATOMİK OLARAK TÜKET ----
@@ -1115,7 +1120,37 @@ namespace ETicaretAPI.Controllers
             {
                 // Bir şey patlarsa HER ŞEYİ geri al
                 await transaction.RollbackAsync();
-                return StatusCode(500, new { mesaj = "Sipariş oluşturulurken hata oldu, işlem geri alındı.", hata = ex.Message });
+
+                // ⭐ DEĞİŞTİ — ex.Message ARTIK İSTEMCİYE GİTMİYOR.
+                //
+                // ⚠️ Eski hali cevaba `hata = ex.Message` koyuyordu ve
+                // bu iki sorun doğuruyordu:
+                //
+                //   1) SIZINTI. SQL Server istisnaları tablo, kolon ve
+                //      kısıt adı taşır:
+                //      "Violation of UNIQUE KEY constraint
+                //       'IX_Orders_OrderNumber' ... object 'dbo.Orders'".
+                //      Yani saldırgana şema haritası veriyordu.
+                //      HataYakalamaMiddleware bunu ortama göre gizliyor
+                //      ama buradaki catch onu ATLIYORDU.
+                //
+                //   2) KAYIT YOKLUĞU. Middleware'e ulaşmadığı için hata
+                //      sunucu log'una hiç düşmüyordu — teşhis için en
+                //      gerekli yerde kayıt yoktu.
+                //
+                // ⚠️ Neden düz `throw;` değil (CancelMyOrder öyle yapıyor)?
+                // Buradaki mesaj müşteriye "işlem geri alındı" diyor —
+                // yani "paran çekilmedi, tekrar deneyebilirsin". Bu bilgi
+                // değerli; middleware'in genel mesajı onu veremez.
+                // Mesajı koruyup ayrıntıyı log'a taşıyoruz.
+                _log.LogError(ex,
+                    "Sipariş oluşturulamadı. userId: {UserId}, anahtar: {Anahtar}",
+                    userId, anahtar ?? "(yok)");
+
+                return StatusCode(500, new
+                {
+                    mesaj = "Sipariş oluşturulurken hata oldu, işlem geri alındı."
+                });
             }
         }
 
@@ -2377,10 +2412,36 @@ namespace ETicaretAPI.Controllers
                 }
 
                 // 3) SİPARİŞİ İPTAL ET + SEBEBİ KAYDET
+                var eskiDurum = order.Status;
+
                 order.Status = SiparisDurumlari.Iptal;
                 order.PaymentStatus = "iade_edildi";
                 order.CancelReason = dto.Reason.Trim();
                 order.CancelledAt = DateTime.UtcNow;
+
+                // 4) DENETİM KAYDI
+                //
+                // ⚠️ Bu işlem stoğu geri veriyor VE ödemeyi iadeye
+                // çeviriyor — yani hem rafı hem kasayı değiştiriyor.
+                // Bugüne kadar hiç kayda geçmiyordu; "bu siparişi hangi
+                // admin, neden iptal etti" sorusunun cevabı yalnızca
+                // siparişin kendi CancelReason alanındaydı ve orada
+                // KİM olduğu yazmıyordu.
+                //
+                // ⚠️ Müşteri iptali (CancelMyOrder) bilerek kayda
+                // girmiyor: denetim kaydı YETKİ KULLANIMINI izler,
+                // müşterinin kendi siparişini iptal etmesi bir yetki
+                // kullanımı değil, kendi hakkı.
+                //
+                // Aynı SaveChanges'te yazılıyor — iptal geri alınırsa
+                // kayıt da geri alınsın.
+                await _denetim.EkleAsync(
+                    yapanId: GetUserId(),
+                    hedefId: order.UserId,
+                    hedefAd: $"Sipariş {order.OrderNumber}",
+                    islem: DenetimIslemi.SiparisIptalAdmin,
+                    eski: eskiDurum,
+                    yeni: $"{SiparisDurumlari.Iptal} — {order.CancelReason}");
 
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();

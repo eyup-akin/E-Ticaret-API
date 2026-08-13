@@ -18,9 +18,15 @@ namespace ETicaretAPI.Controllers
     {
         private readonly AppDbContext _context;
 
-        public SozlesmelerController(AppDbContext context)
+        // ⭐ YENİ — denetim kaydı ortak servisten (elle AuditLogs.Add yerine).
+        private readonly ETicaretAPI.Services.DenetimKaydi _denetim;
+
+        public SozlesmelerController(
+            AppDbContext context,
+            ETicaretAPI.Services.DenetimKaydi denetim)
         {
             _context = context;
+            _denetim = denetim;
         }
 
         // 🟢 GET /api/sozlesmeler — aktif metinlerin listesi (içeriksiz)
@@ -244,17 +250,13 @@ namespace ETicaretAPI.Controllers
             // hedef alanı bir kullanıcıya işaret etmek zorunda ve
             // burada değişen şey bir kullanıcı değil. Hedef adı, neyin
             // değiştiğini okunur biçimde taşıyor.
-            _context.AuditLogs.Add(new AuditLog
-            {
-                ActorUserId = userId,
-                ActorName = kullanici.FullName,
-                TargetUserId = userId,
-                TargetName = $"Sözleşme: {tip}",
-                Action = "sozlesme_guncellendi",
-                OldValue = $"v{aktif.Surum}",
-                NewValue = $"v{yeni.Surum}",
-                CreatedAt = DateTime.UtcNow
-            });
+            await _denetim.EkleAsync(
+                yapanId: userId,
+                hedefId: userId,
+                hedefAd: $"Sözleşme: {tip}",
+                islem: ETicaretAPI.Services.DenetimIslemi.SozlesmeGuncellendi,
+                eski: $"v{aktif.Surum}",
+                yeni: $"v{yeni.Surum}");
 
             await _context.SaveChangesAsync();
             await islem.CommitAsync();

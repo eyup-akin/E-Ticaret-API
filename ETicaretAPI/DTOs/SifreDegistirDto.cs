@@ -25,11 +25,14 @@ namespace ETicaretAPI.DTOs
         [Required(ErrorMessage = "Mevcut şifren gerekli.")]
         public string EskiSifre { get; set; } = string.Empty;
 
-        // Minimum 6 karakter — reset-password endpoint'iyle AYNI kural.
-        // İki yerde farklı olsaydı "sıfırlarken kabul edilen şifre
-        // değiştirirken reddediliyor" gibi tuhaf bir durum çıkardı.
+        // ⭐ DEĞİŞTİ — [MinLength(6)] yerine ortak öznitelik.
+        //
+        // Kural burada, kayıtta ve şifre sıfırlamada AYNI olmak zorunda;
+        // "sıfırlarken kabul edilen şifre değiştirirken reddediliyor"
+        // gibi bir tuhaflık çıkmasın diye. Elle yazılı üç kopya yerine
+        // tek kaynak: SifreGucluAttribute.
         [Required(ErrorMessage = "Yeni şifre gerekli.")]
-        [MinLength(6, ErrorMessage = "Şifre en az 6 karakter olmalı biladerim!")]
+        [SifreGuclu]
         public string YeniSifre { get; set; } = string.Empty;
     }
 }

@@ -24,15 +24,30 @@ namespace ETicaretAPI.Services
             // Fiyat OrderItem'dan (dondurulmuş), ürünün bugünkü fiyatından değil.
             var kalemToplami = kalem.UnitPrice * kalem.Quantity;
 
-            // ⚠️ Kupon indirimi orantılı düşülüyor: indirim sipariş
-            // seviyesinde uygulanıyor, ham fiyatı geri ödersek müşteri
-            // indirim payını da cebe atar.
+            // ⚠️ İndirim orantılı düşülüyor: indirim sipariş seviyesinde
+            // uygulanıyor, ham fiyatı geri ödersek müşteri indirim payını
+            // da cebe atar.
+            //
+            // ⭐ DEĞİŞTİ — DiscountAmount değil ToplamIndirim.
+            //
+            // Eskiden yalnızca kupon indirimi (DiscountAmount) düşülüyordu.
+            // Kombin indirimi (Order.KombinIndirimi) ayrı bir alanda
+            // tutuluyor ve bu hesap onu HİÇ görmüyordu: kombin indirimli
+            // bir siparişten tek kalem iade edildiğinde müşteriye indirim
+            // payı düşülmeden ödeme yapılıyordu.
+            //
+            // Örnek: A (400) + B (600), %10 kombin indirimi.
+            //   SubTotal 1000, KombinIndirimi 100.
+            //   A iade edilince eski hesap 400 TL ödüyordu; doğrusu 360.
+            //
+            // Order.ToplamIndirim iki alanı topluyor, yani yarın üçüncü
+            // bir indirim eklenirse burası kendiliğinden doğru kalır.
             var indirimPayi = 0m;
 
-            if (siparis.DiscountAmount > 0 && siparis.SubTotal > 0)
+            if (siparis.ToplamIndirim > 0 && siparis.SubTotal > 0)
             {
                 indirimPayi = Math.Round(
-                    siparis.DiscountAmount * kalemToplami / siparis.SubTotal,
+                    siparis.ToplamIndirim * kalemToplami / siparis.SubTotal,
                     2,
                     MidpointRounding.AwayFromZero);
             }

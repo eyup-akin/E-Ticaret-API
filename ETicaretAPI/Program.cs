@@ -71,6 +71,13 @@ builder.Services.AddScoped<ETicaretAPI.Services.RaporTarihi>();
 // ⭐ YENİ — stok hareket defteri yazıcısı
 builder.Services.AddScoped<ETicaretAPI.Services.StokDefteri>();
 
+// ⭐ YENİ — denetim kaydı yazıcısı.
+//
+// Scoped: DbContext'e bağlı, onunla aynı ömre sahip olmalı.
+// (StokDefteri ile aynı gerekçe; ikisi de "context'e ekle, kaydetme"
+//  deseninde çalışıyor.)
+builder.Services.AddScoped<ETicaretAPI.Services.DenetimKaydi>();
+
 // ⭐ YENİ (Aşama 8) — destek yazışmasını okuyan ortak servis.
 //
 // Scoped: DbContext'e bağımlı, yani onunla aynı ömre sahip olmalı.
@@ -97,7 +104,7 @@ builder.Services.AddScoped<ETicaretAPI.Services.KombinServisi>();
 // Bu sınıfın DURUMU YOK — sadece IConfiguration'a bakıp değer
 // döndürüyor. Her istek için yeni bir örnek üretmenin hiçbir
 // faydası olmaz, sadece boşuna nesne oluşur.
-//f
+//
 // Kural: bağımlılıkları da singleton olabilen, durumsuz servisler
 // singleton olur. IConfiguration zaten singleton, uyumlu.
 //
@@ -361,7 +368,6 @@ builder.Services.AddRateLimiter(options =>
             partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "bilinmeyen",
             factory: _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
             {
-                //PermitLimit = 3,
                 // ⭐ DEĞİŞTİ: 3 → 5
                 //
                 // Neden gevşettik? Bu ucun brute-force değeri düşük:
@@ -426,8 +432,39 @@ app.UseCors("VarsayilanCors");
 
 app.UseAuthentication();  // önce: token'ı oku, kim olduğunu belirle
 
-// app.UseMiddleware<GuvenlikDamgasiMiddleware>(); //token bayat mı? //her istekte çalışması artık gereksiz. piplinedan çıkarıoyruz.
-//kullanıcı pasif mi? silinmiş mi?
+// ⭐ GERİ AÇILDI — token bayat mı? kullanıcı pasif mi?
+//
+// ⚠️ BU SATIR BİR SÜRE YORUMDA KALDI VE SESSİZ BİR AÇIK ÜRETTİ.
+//
+// Kapalıyken JWT'nin tek güvencesi imza ve süreydi. Sonuç: acil yetki
+// iptali diye bir şey kalmamıştı. Access token 15 dakikalık olduğu için
+// aşağıdaki dört işlemin hiçbiri ANINDA etki etmiyordu:
+//
+//   • Süperadmin bir admin'i müşteriye düşürür → elindeki token 15 dk
+//     daha ADMİN yetkisiyle çalışırdı
+//   • Hesap pasifleştirilir            → 15 dk daha her uca erişirdi
+//   • Şifre değiştirilir / sıfırlanır  → çalınan token 15 dk daha geçerliydi
+//   • Hesap kapatılır (KVKK)           → anonimleştirilmiş hesabın token'ı
+//                                        15 dk daha çalışırdı
+//
+// Refresh token'lar bu işlemlerde iptal ediliyordu, evet — ama access
+// token refresh yolundan geçmiyor. Yani iptal bir sonraki yenilemeye
+// kadar bekliyordu.
+//
+// Daha kötüsü: AuthController ve AdminController'daki yorumlar
+// "eldeki tüm access token'lar ANINDA geçersizleşir" diyordu. Kodu
+// okuyan "damgayı yeniledim, iş bitti" sanıyordu. Bayat yorum,
+// yorumsuz koddan kötüdür.
+//
+// ⚠️ MALİYETİ: istek başına bir SELECT — birincil anahtar üzerinden,
+// tek satır, iki kolon (AsNoTracking). Bu ölçekte ölçülemez.
+// Önbellek (IMemoryCache) BİLEREK eklenmedi: kazancı yok, karşılığında
+// bir invalidation mantığı ve onunla birlikte yeni bir hata kaynağı
+// getirirdi. Veri büyürse o zaman değerlendirilir.
+//
+// ⚠️ SIRASI ÖNEMLİ: UseAuthentication'dan SONRA (kimlik okunmuş olmalı),
+// UseAuthorization'dan ÖNCE (yetki kontrolünden önce kimliği düşürelim).
+app.UseMiddleware<GuvenlikDamgasiMiddleware>();
 
 app.UseAuthorization();   // sonra: yetkisi var mı kontrol et
 

@@ -16,10 +16,6 @@ namespace ETicaretAPI.Controllers
     // siparişi tekrar vermek POST /api/orders/{id}/tekrarla ile
     // oluyor ve o uç zaten var — ikinci bir yol yazmıyoruz.
     //
-    // ⚠️ LİSTE UCU (GET) HENÜZ YOK. Ekran bir sonraki aşamada
-    // yazılacak; tüketicisi olmayan bir uç yazmak, yarın ekran
-    // yazılırken "acaba bu cevap şekli doğru mu" diye tartışılacak
-    // bir varsayım bırakmak olurdu.
     [Route("api/hizli-siparisler")]
     [ApiController]
     [Authorize]
@@ -35,6 +31,74 @@ namespace ETicaretAPI.Controllers
         private int GetUserId()
         {
             return int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
+        }
+
+        // Listede sipariş başına kaç ürün adı gösterilecek?
+        //
+        // ⚠️ Kalemlerin TAMAMI gönderilmiyor. Ekranda satır başına iki
+        // satırlık yer var; 20 kalemlik bir siparişin hepsini yollamak
+        // hiç çizilmeyecek veriyi ağdan geçirmek olurdu.
+        // ("Liste ucu özet, detay ucu tam veri" — admin sipariş
+        //  listesindeki desenin aynısı.)
+        private const int OnizlemeUrunSayisi = 3;
+
+        // 🟡 GET /api/hizli-siparisler — kaydettiğim siparişler
+        [HttpGet]
+        public async Task<IActionResult> Listele()
+        {
+            var userId = GetUserId();
+
+            var liste = await _context.HizliSiparisler
+                .Where(h => h.UserId == userId)
+
+                // En son kaydedilen en üstte: müşteri az önce
+                // kaydettiğini listenin başında görmeli.
+                //
+                // ⚠️ Siparişin TARİHİNE göre değil, KAYIT tarihine göre.
+                // İkisi farklı sorular: "ne zaman sipariş verdim" ile
+                // "ne zaman kaydettim". Bu ekran ikincisinin listesi.
+                .OrderByDescending(h => h.CreatedAt)
+                .ThenByDescending(h => h.Id)
+
+                .Join(_context.Orders,
+                      h => h.OrderId,
+                      o => o.Id,
+                      (h, o) => new { h, o })
+
+                .Select(x => new
+                {
+                    orderId = x.o.Id,
+                    siparisNo = x.o.OrderNumber,
+                    siparisTarihi = x.o.CreatedAt,
+                    kayitTarihi = x.h.CreatedAt,
+                    toplam = x.o.Total,
+
+                    // Kaç çeşit / kaç adet — "3 üründen 5 adet" diye
+                    // gösterilecek.
+                    urunCesidi = _context.OrderItems.Count(oi => oi.OrderId == x.o.Id),
+
+                    toplamAdet = _context.OrderItems
+                        .Where(oi => oi.OrderId == x.o.Id)
+                        .Sum(oi => (int?)oi.Quantity) ?? 0,
+
+                    // ⚠️ ÜRÜN ADI KALEMİN İÇİNDEN, Products'tan DEĞİL.
+                    //
+                    // OrderItem.ProductName sipariş anında donduruldu.
+                    // Products'a JOIN atsaydık iki sorun çıkardı:
+                    // ürün silinmişse INNER JOIN satırı düşürür ve
+                    // isim listesi eksik kalırdı; adı değişmişse
+                    // müşteri sipariş verdiği ürünü tanıyamazdı.
+                    //
+                    // Bu alt sorgu ana SQL'e gömülüyor — N+1 yok.
+                    urunler = _context.OrderItems
+                        .Where(oi => oi.OrderId == x.o.Id)
+                        .Select(oi => oi.ProductName)
+                        .Take(OnizlemeUrunSayisi)
+                        .ToList()
+                })
+                .ToListAsync();
+
+            return Ok(liste);
         }
 
         // 🟡 POST /api/hizli-siparisler/5 — siparişi kaydet

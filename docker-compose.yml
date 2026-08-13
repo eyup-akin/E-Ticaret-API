@@ -1,28 +1,29 @@
 # ============================================================
-#  ADIM 1 — YALNIZCA VERİTABANI
+#  ADIM 2 — VERİTABANI + API
 #
-#  Bu dosya şu an TEK bir şey yapıyor: SQL Server'ı bir kutunun
-#  (container) içinde çalıştırıyor. API hâlâ senin bilgisayarında
-#  `dotnet run` ile çalışacak.
-#
-#  ⚠️ NEDEN ÖNCE SADECE VERİTABANI?
-#
-#  Her şeyi birden kutulayıp "umarım çalışır" demek yerine tek
-#  parçadan başlıyoruz. Bu adım bozulursa suçlu belli: veritabanı.
-#  Çalıştığını gördükten sonra 2. adımda API'yi de ekleyeceğiz.
+#  Artık iki kutu var: SQL Server ve ASP.NET Core API. İkisi de
+#  senin bilgisayarında çalışıyor, sunucu yok. Adım 3'te Caddy
+#  (HTTPS) eklenecek, adım 4'te aynı dosya sunucuya taşınacak.
 #
 #  ⚠️ WINDOWS'TAKİ MEVCUT SQL SERVER'INA DOKUNMUYORUZ.
-#  O çalışmaya devam ediyor, verilerin yerinde duruyor. Bu container
-#  BOŞ ve AYRI bir veritabanı — istediğin an ikisi arasında geçiş
-#  yapabilirsin (tek satır: appsettings.Development.json).
+#  O çalışmaya devam ediyor, verilerin yerinde duruyor.
+#
+#  ⚠️ `dotnet run` HÂLÂ ÇALIŞIYOR.
+#  Konteyner API'si 5289'u kullandığı için ikisi aynı anda açık
+#  olamaz — biri kapanacak. Kod yazarken `dotnet run` daha pratik
+#  (anında yeniden derleme); konteyner "sunucuda nasıl davranacak"
+#  sorusunun cevabı.
 #
 #  ----- KULLANIM -----
-#    docker compose up -d      → başlat (arka planda)
-#    docker compose ps         → çalışıyor mu bak
-#    docker compose logs -f db → günlükleri izle (Ctrl+C ile çık)
-#    docker compose stop       → durdur (veri KALIR)
-#    docker compose down       → durdur + kutuyu sil (veri yine KALIR)
-#    docker compose down -v    → ⚠️ VERİYİ DE SİLER
+#    docker compose up -d --build → derle ve başlat
+#    docker compose ps            → çalışıyor mu bak
+#    docker compose logs -f api   → API günlükleri (Ctrl+C ile çık)
+#    docker compose stop          → durdur (veri KALIR)
+#    docker compose down          → durdur + kutuları sil (veri KALIR)
+#    docker compose down -v       → ⚠️ VERİYİ DE SİLER
+#
+#  ⚠️ KOD DEĞİŞTİRİNCE `--build` ŞART. Onsuz Docker eski imajı
+#  başlatır ve "değişikliğim neden görünmüyor" dersin.
 # ============================================================
 
 services:
@@ -110,6 +111,113 @@ services:
       # İlk açılış yavaş; bu süre boyunca başarısız denemeler
       # "sağlıksız" sayılmıyor.
       start_period: 30s
+
+  # ============================================================
+  #  API — ASP.NET Core 10
+  # ============================================================
+  api:
+    # Hazır imaj yok, kendi imajımızı derliyoruz.
+    build:
+      # Derleme bağlamı: bu klasörün tamamı. Dockerfile içindeki
+      # yollar (ETicaretAPI/ETicaretAPI.csproj) buna göre.
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: satik-api
+
+    # ⚠️ SADECE "depends_on: db" YETMEZ.
+    #
+    # Düz `depends_on` yalnızca "db container'ı BAŞLATILDI" der.
+    # SQL Server ise başladıktan sonra 10-20 saniye bağlantı kabul
+    # etmiyor. API o aralıkta kalkarsa ilk sorguda patlar.
+    #
+    # `condition: service_healthy` db servisindeki healthcheck'in
+    # geçmesini bekliyor — 1. adımda onu tam da bunun için yazmıştık.
+    depends_on:
+      db:
+        condition: service_healthy
+
+    environment:
+      # ⚠️ NEDEN Development, NEDEN Production DEĞİL?
+      #
+      # Bu adımda tek bir şeyi değiştiriyoruz: API'nin nerede
+      # çalıştığını. Aynı anda Production'a geçseydik CORS listesi
+      # (Cors:AllowedOrigins hâlâ "admin.senindomainin.com" yer
+      # tutucusu) admin paneli anında keserdi ve hatanın konteynerden
+      # mi ayardan mı geldiğini anlayamazdık.
+      #
+      # ⚠️ Production'a geçiş Adım 3'ün işi: CORS listesi + gerçek
+      # alan adı + UseForwardedHeaders birlikte çözülecek.
+      ASPNETCORE_ENVIRONMENT: Development
+
+      # ⚠️ appsettings.json'daki bağlantı dizesini EZİYOR.
+      #
+      # .NET'te iki alt çizgi (__) yapılandırmadaki iki nokta (:)
+      # yerine geçiyor: ConnectionStrings__DefaultConnection
+      # tam olarak ConnectionStrings:DefaultConnection demek.
+      # Ortam değişkeni appsettings dosyalarından SONRA okunduğu için
+      # kazanan bu oluyor.
+      #
+      # ⚠️ "Server=db" — localhost DEĞİL.
+      #
+      # Konteynerin içinde "localhost" KENDİSİ demek; orada SQL
+      # Server yok. Compose her servise adıyla çözülen bir DNS kaydı
+      # veriyor, yani "db" veritabanı konteynerine gidiyor.
+      #
+      # ⚠️ Port 1433, 14330 DEĞİL. 14330 dışarıya (Windows'a) açılan
+      # port; konteynerler birbirine iç ağdan, gerçek portla ulaşıyor.
+      ConnectionStrings__DefaultConnection: "Server=db,1433;Database=ETicaretRealDb;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True;"
+
+      # JWT imzalama anahtarı.
+      #
+      # ⚠️ appsettings.json'da "SET_IN_USER_SECRETS" yazıyor, gerçek
+      # anahtar appsettings.Development.json'da — o dosya hem
+      # .gitignore'da hem .dockerignore'da, yani imaja GİRMİYOR.
+      # Konteyner anahtarı buradan alıyor, .env'den geliyor.
+      #
+      # ⚠️ Bu değer boş kalırsa API açılışta patlar (Program.cs'te
+      # Jwt:Key null-forgiving "!" ile okunuyor). Sessizce güvensiz
+      # çalışmaktansa patlaması iyi.
+      Jwt__Key: ${JWT_KEY}
+
+      # E-posta doğrulama linkinin işaret ettiği adres.
+      #
+      # ⚠️ Bu değer YANLIŞSA kayıt akışı sessizce kırılır: mail
+      # gider, link tıklanır, hiçbir yere ulaşmaz. Alan adı gelince
+      # (Adım 3) .env'de tek satır değişecek.
+      Uygulama__TabanUrl: ${API_TABAN_URL:-http://localhost:5289}
+
+    ports:
+      # ⚠️ 5289:8080 — dışarısı 5289, içerisi 8080.
+      #
+      # Konteyner 8080 dinliyor (Dockerfile'da ayarlı) ama dışarıya
+      # 5289 olarak çıkıyor. Sebep: admin `.env`'deki VITE_API_IP ve
+      # mobil `.env`'deki EXPO_PUBLIC_API_IP zaten 5289'a bakıyor.
+      # Böylece iki ön yüzde hiçbir şey değişmiyor.
+      - "5289:8080"
+
+    volumes:
+      # ⚠️ ÜRÜN GÖRSELLERİ — ADIM 2'NİN EN KRİTİK SATIRI.
+      #
+      # Bu satır olmasaydı 121 ürün görseli konteynerin içinde
+      # kalırdı ve `docker compose down` ya da her `--build` sonrası
+      # HEPSİ UÇARDI. Ürünler veritabanında durur, görselleri
+      # gösteren yol 404 döner.
+      #
+      # ⚠️ NEDEN VOLUME DEĞİL, HOST KLASÖRÜ (bind mount)?
+      #
+      # 121 dosya zaten burada duruyor. Named volume kullansaydık
+      # dosyaları içine ayrıca kopyalamak gerekirdi (Docker boş
+      # volume'ü imajdan doldurur, imajda ise .dockerignore yüzünden
+      # yoklar). Host klasörü bağlayınca kopyalama yok, üstelik
+      # Windows'tan gözle görüp yönetebiliyorsun.
+      #
+      # ⚠️ SUNUCUDA (Adım 4) BU SATIR DEĞİŞECEK: orada host'ta böyle
+      # bir klasör olmayacak, named volume'e dönecek ve görseller
+      # oraya bir kez taşınacak.
+      - ./ETicaretAPI/wwwroot/uploads:/app/wwwroot/uploads
+
+    restart: unless-stopped
 
 # Kalıcı disk alanları burada tanımlanıyor.
 #

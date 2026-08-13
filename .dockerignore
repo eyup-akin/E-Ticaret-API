@@ -1,0 +1,60 @@
+# ============================================================
+#  Docker'ın GÖRMEYECEĞİ dosyalar.
+#
+#  `docker build` önce bu klasörün tamamını Docker'a gönderir
+#  ("build context"). Buradaki her satır o gönderimden düşülür.
+#
+#  İki ayrı işe yarıyor:
+#    1) HIZ — bin/obj ve 121 ürün görseli boşuna gönderilmesin
+#    2) GÜVENLİK — sırlar imaja SIZMASIN
+#
+#  ⚠️ .gitignore ile aynı şey DEĞİL. Docker .gitignore'a bakmaz.
+#  Bir dosyanın repoda olmaması, imaja girmeyeceği anlamına gelmez.
+# ============================================================
+
+# ---- SIRLAR: imaja asla girmemeli ----
+#
+# ⚠️ Bu iki satır bu dosyanın en önemli kısmı.
+#
+# Imaj bir dosya paketi; sunucuya gönderilir, registry'e yüklenir,
+# `docker history` ile katmanları okunabilir. İçine giren şifre
+# dışarı çıkmış sayılır. İkisi de ortam değişkeni olarak veriliyor
+# (docker-compose.yml), dosya olarak değil.
+.env
+**/appsettings.Development.json
+
+# ---- Derleme çıktıları ----
+#
+# Bunlar Windows'ta üretildi, imaj Linux. Gönderilmeleri hem
+# yavaşlatır hem de "derleme neden bazen tuhaf davranıyor"
+# sorusunun sebebi olur — Docker kendi içinde sıfırdan derliyor.
+**/bin/
+**/obj/
+
+# ---- Ürün görselleri ----
+#
+# wwwroot/uploads kalıcı bir volume olarak bağlanıyor, yani
+# imajın içindekiler zaten görünmez olurdu. Ama 121 dosyayı her
+# derlemede Docker'a göndermek de gereksiz.
+#
+# ⚠️ Bu satır sayesinde imaj "boş" doğuyor. Görseller volume'den
+# geliyor — o bağlanmazsa görsel olmaz. Kasıtlı: veri imajda değil,
+# volume'de yaşamalı.
+ETicaretAPI/wwwroot/uploads/
+
+# ---- Geliştirme ortamı ----
+.git/
+.github/
+.vs/
+.gitignore
+.gitattributes
+.dockerignore
+Dockerfile
+docker-compose.yml
+*.md
+
+# ---- Test projesi ----
+#
+# Testler CI'da çalışır, sunucuda değil. İmaja girmesi son imajı
+# büyütmekten başka bir işe yaramaz.
+ETicaretAPI.Tests/

@@ -23,23 +23,14 @@ namespace ETicaretAPI.Support
         // deseydik uygulamanın en pahalı sorgusu SAYFANIN İLK AÇILIŞI olurdu.
         public const int VarsayilanGun = 7;
 
-        // ⚠️ SAYFA NUMARASININ DA ÜST SINIRI VAR.
+        // ⚠️ Sayfa numarasının üst sınırı SayfaSiniri'nde — taşma
+        // koruması dokuz uçta daha gerekiyordu, tek kopya kaldı.
         //
-        // ⚠️ Bu bir TAŞMA (overflow) koruması, kozmetik bir sınır değil.
-        // Skip((sayfa - 1) * boyut) int aritmetiği: page=2000000000 &
-        // pageSize=100 çarpımı int'e sığmıyor, NEGATİF bir sayıya
-        // dönüşüyor ve SQL Server "OFFSET clause may not be negative"
-        // diyerek 500 fırlatıyor. Gerçek istekle denenip görüldü.
-        //
-        // 100.000: 100'lük sayfalarla 10 milyon satır demek — hiçbir
-        // gerçek kullanım buraya gelmez, çarpım da int'e rahat sığar.
-        private const int EnBuyukSayfa = 100000;
-
         // ⚠️ pageSize ÜST SINIRI SUNUCUDA ZORLANIYOR. "?pageSize=100000"
         // yazan bir istek, sayfalamanın koruduğu her şeyi geçersiz kılardı.
         public static (int Sayfa, int Boyut) SayfaDuzelt(int page, int pageSize)
         {
-            var sayfa = Math.Clamp(page, 1, EnBuyukSayfa);
+            var sayfa = SayfaSiniri.Duzelt(page);
             var boyut = pageSize < 1 || pageSize > 100 ? 20 : pageSize;
 
             return (sayfa, boyut);

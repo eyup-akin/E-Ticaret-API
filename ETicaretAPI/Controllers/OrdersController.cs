@@ -1747,10 +1747,10 @@ namespace ETicaretAPI.Controllers
             [FromQuery] int pageSize = 10)
         {
             // Güvenlik: kullanıcı pageSize=999999 yazıp sunucuyu zorlamasın
-            if (page < 1)
-            {
-                page = 1;
-            }
+            //
+            // ⭐ DEĞİŞTİ — sayfa numarasına da üst sınır (taşma koruması,
+            // gerekçe SayfaSiniri'nde).
+            page = ETicaretAPI.Support.SayfaSiniri.Duzelt(page);
 
             if (pageSize < 1 || pageSize > 100)
             {

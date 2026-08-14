@@ -1618,10 +1618,10 @@ namespace ETicaretAPI.Controllers
             // İstemciden gelen hiçbir sayıya güvenmiyoruz. pageSize=999999
             // yazan biri tek istekle tüm tabloyu belleğe çektirebilirdi.
             // Üst sınır projedeki diğer uçlarla aynı (100).
-            if (page < 1)
-            {
-                page = 1;
-            }
+            //
+            // ⭐ DEĞİŞTİ — sayfa numarasına da üst sınır (taşma koruması,
+            // gerekçe SayfaSiniri'nde).
+            page = ETicaretAPI.Support.SayfaSiniri.Duzelt(page);
 
             if (pageSize < 1 || pageSize > 100)
             {

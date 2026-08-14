@@ -62,10 +62,8 @@ namespace ETicaretAPI.Controllers
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 10)
         {
-            if (page < 1)
-            {
-                page = 1;
-            }
+            // ⭐ DEĞİŞTİ — üst sınır da var artık (taşma koruması).
+            page = ETicaretAPI.Support.SayfaSiniri.Duzelt(page);
 
             if (pageSize < 1 || pageSize > 100)
             {
@@ -1254,10 +1252,8 @@ namespace ETicaretAPI.Controllers
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 10)
         {
-            if (page < 1)
-            {
-                page = 1;
-            }
+            // ⭐ DEĞİŞTİ — üst sınır da var artık (taşma koruması).
+            page = ETicaretAPI.Support.SayfaSiniri.Duzelt(page);
 
             if (pageSize < 1 || pageSize > 100)
             {

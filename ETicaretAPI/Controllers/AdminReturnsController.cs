@@ -99,7 +99,8 @@ namespace ETicaretAPI.Controllers
             [FromQuery] int sayfa = 1,
             [FromQuery] int sayfaBoyutu = 20)
         {
-            if (sayfa < 1) sayfa = 1;
+            // ⭐ DEĞİŞTİ — üst sınır da var artık (taşma koruması).
+            sayfa = ETicaretAPI.Support.SayfaSiniri.Duzelt(sayfa);
             if (sayfaBoyutu < 1 || sayfaBoyutu > 100) sayfaBoyutu = 20;
 
             var query = _context.ReturnRequests.AsQueryable();

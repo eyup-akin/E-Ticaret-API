@@ -86,10 +86,8 @@ namespace ETicaretAPI.Controllers
             // Client saçma sayfa numarası gönderirse düzelt.
             // pageSize'a tavan koymak önemli: biri ?pageSize=999999 derse
             // tüm tabloyu belleğe çekeriz, sunucu boğulur.
-            if (page < 1)
-            {
-                page = 1;
-            }
+            // ⭐ DEĞİŞTİ — üst sınır da var artık (taşma koruması).
+            page = ETicaretAPI.Support.SayfaSiniri.Duzelt(page);
 
             if (pageSize < 1 || pageSize > 100)
             {
@@ -632,10 +630,8 @@ namespace ETicaretAPI.Controllers
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 20)
         {
-            if (page < 1)
-            {
-                page = 1;
-            }
+            // ⭐ DEĞİŞTİ — üst sınır da var artık (taşma koruması).
+            page = ETicaretAPI.Support.SayfaSiniri.Duzelt(page);
 
             if (pageSize < 1 || pageSize > 100)
             {

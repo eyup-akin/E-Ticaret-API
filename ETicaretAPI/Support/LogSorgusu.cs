@@ -56,11 +56,19 @@ namespace ETicaretAPI.Support
         // aşılırsa SQL Server geri kalanı hiç saymıyor.
         public static async Task<(int Toplam, bool Asildi)> SayAsync<T>(IQueryable<T> sorgu)
         {
-            var sayi = await sorgu.Take(SayimUstSiniri + 1).CountAsync();
+            return SayimiYorumla(await sorgu.Take(SayimUstSiniri + 1).CountAsync());
+        }
 
-            return sayi > SayimUstSiniri
+        /// <summary>Ham sayımı ekranın beklediği (toplam, aşıldı) çiftine çevirir.</summary>
+        //
+        // ⚠️ Kural SayAsync'ten AYRI çünkü CountAsync EF'e özgü ve
+        // testte sahte bir IQueryable ile çağrılamıyor. Ayrılınca
+        // kuralın kendisi saf ve test edilebilir kalıyor.
+        public static (int Toplam, bool Asildi) SayimiYorumla(int hamSayi)
+        {
+            return hamSayi > SayimUstSiniri
                 ? (SayimUstSiniri, true)
-                : (sayi, false);
+                : (hamSayi, false);
         }
     }
 }

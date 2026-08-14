@@ -191,6 +191,39 @@ services:
       # (Adım 3) .env'de tek satır değişecek.
       Uygulama__TabanUrl: ${API_TABAN_URL:-http://localhost:5289}
 
+      # ⭐ YENİ — ŞİFRE SIFIRLAMA LİNKİNİN İŞARET ETTİĞİ ADRES.
+      #
+      # ⚠️⚠️ BU SATIR OLMADAN ŞİFRE SIFIRLAMA DIŞARIDAN ÇALIŞMIYORDU.
+      #
+      # appsettings.json'daki varsayılan bir LAN IP'si
+      # (http://10.119.5.1:5173) ve burada ezilmiyordu. Konsol
+      # göndericisi kimseye mail atmadığı için hata görünmedi; gerçek
+      # gönderime geçince maildeki link doğrudan o LAN adresini
+      # gösterirdi ve dışarıdan tıklayan hiçbir şey göremezdi.
+      #
+      # ⚠️ TabanUrl ile AYNI adres olması doğru, yazım hatası değil:
+      # Caddy admin panelini aynı adresin KÖKÜNDEN sunuyor
+      # (/api, /uploads, /hangfire dışındaki her şey SPA'ya düşüyor),
+      # yani /sifre-yenile?token=... React Router'a ulaşıyor.
+      Uygulama__PanelUrl: ${PANEL_URL:-http://localhost:5173}
+
+      # ⭐ YENİ — E-POSTA GÖNDERİMİ (Brevo)
+      #
+      # ⚠️ Saglayici "konsol" kaldığı sürece HİÇ KİMSEYE MAİL GİTMEZ;
+      # doğrulama linki yalnızca konteyner günlüğüne düşer ve
+      # dışarıdan kimse kayıt tamamlayamaz.
+      #
+      # ⚠️ "brevo" seçilip ApiAnahtari boş bırakılırsa API AÇILMAZ —
+      # sessizce konsola düşüp "mail gitti" sanmaktansa patlaması
+      # bilinçli bir karar (Program.cs).
+      Email__Saglayici: ${EMAIL_SAGLAYICI:-konsol}
+      Email__ApiAnahtari: ${BREVO_API_ANAHTARI:-}
+      Email__GonderenAdres: ${EMAIL_GONDEREN_ADRES:-}
+
+      # ⚠️ GÜVENLİK VALFİ — doluysa TÜM mailler bu adrese gider.
+      # Geliştirmede doldur, canlıda BOŞ bırak.
+      Email__TumunuSuAdreseYonlendir: ${EMAIL_YONLENDIR:-}
+
       # X-Forwarded-For'a hangi ağlardan güvenilecek — yani Caddy'nin ağı.
       #
       # ⚠️ Bu değer olmadan Adım 3'ün hiçbir anlamı yok: API başlığı

@@ -7,6 +7,12 @@ using ETicaretAPI.DTOs;
 
 using Microsoft.AspNetCore.RateLimiting; // ⭐ YENİ
 
+// ⭐ YENİ — GuvenliGonderAsync bir UZANTI METODU ve uzantı metotları
+// tam nitelikli adla (ETicaretAPI.Services.…) çağrılamaz; namespace'in
+// using ile içeri alınması ŞART. Bu dosyada tipler tam nitelikli
+// yazıldığı için using yoktu ve derleyici "böyle bir tanım yok" diyordu.
+using ETicaretAPI.Services;
+
 namespace ETicaretAPI.Controllers
 {
     [Route("api/[controller]")]
@@ -180,7 +186,28 @@ namespace ETicaretAPI.Controllers
                 $"<p>Hesabını doğrulamak için aşağıdaki linke tıkla (24 saat geçerli):</p>" +
                 $"<p><a href=\"{link}\">{link}</a></p>";
 
-            await _email.GonderAsync(yeniKullanici.Email, "Email Doğrulama", govde);
+            // ⭐⭐ DEĞİŞTİ — ARTIK GuvenliGonderAsync, ÇIPLAK GonderAsync DEĞİL.
+            //
+            // ⚠️ BU SATIR KONSOL GÖNDERİCİSİYLE ASLA PATLAMIYORDU, GERÇEK
+            // SAĞLAYICIYLA PATLAYABİLİR (ağ, kota, geçersiz anahtar).
+            //
+            // Korumasız hâlinin sonucu şuydu: kullanıcı yukarıda
+            // SaveChanges ile ZATEN veritabanına yazılmış oluyor. Mail
+            // burada patlarsa istek 500 döner, kullanıcı "kayıt olamadım"
+            // sanıp tekrar dener ve bu sefer "Bu email zaten kayıtlı"
+            // alır. Ne girebildiği ne de yeniden kaydolabildiği,
+            // kurtarılamaz bir hesap.
+            //
+            // ⚠️ Mesaj yine "linke tıkla" diyor, oysa mail gitmemiş
+            // olabilir. Bilinçli: kurtarma yolu ZATEN VAR
+            // (POST /api/auth/resend-verification). Akışın ortasında
+            // "kaydın oldu ama mailin gitmedi" demek kullanıcıyı ne
+            // yapacağını bilmez halde bırakırdı; hata günlüğe düşüyor.
+            await _email.GuvenliGonderAsync(
+                _log,
+                yeniKullanici.Email,
+                new ETicaretAPI.Services.EmailIcerik("Email Doğrulama", govde),
+                "EmailDogrulama:Kayit");
 
             return Ok(new { mesaj = "Kayıt başarılı! Lütfen email adresine gelen linkle hesabını doğrula." });
         }
@@ -264,7 +291,16 @@ namespace ETicaretAPI.Controllers
                     $"<p>Hesabını doğrulamak için aşağıdaki linke tıkla (24 saat geçerli):</p>" +
                     $"<p><a href=\"{link}\">{link}</a></p>";
 
-                await _email.GonderAsync(kullanici.Email, "Email Doğrulama (Yeniden Gönderim)", govde);
+                // ⭐ DEĞİŞTİ — GuvenliGonderAsync. Gerekçe Register'da yazılı.
+                //
+                // ⚠️ Burada patlaması ayrıca can sıkıcı olurdu: bu uç zaten
+                // "mailim gelmedi" diyen kullanıcının son çaresi. 500
+                // dönseydi kullanıcının elinde hiçbir yol kalmazdı.
+                await _email.GuvenliGonderAsync(
+                    _log,
+                    kullanici.Email,
+                    new ETicaretAPI.Services.EmailIcerik("Email Doğrulama (Yeniden Gönderim)", govde),
+                    "EmailDogrulama:YenidenGonderim");
             }
 
             // ⭐ GÜVENLİK: forgot-password'deki mantığın aynısı — hesap olsa da
@@ -308,7 +344,18 @@ namespace ETicaretAPI.Controllers
                     $"<p><a href=\"{link}\">{link}</a></p>" +
                     $"<p>Bu isteği sen yapmadıysan bu maili görmezden gelebilirsin.</p>";
 
-                await _email.GonderAsync(kullanici.Email, "Şifre Sıfırlama", govde);
+                // ⭐ DEĞİŞTİ — GuvenliGonderAsync. Gerekçe Register'da yazılı.
+                //
+                // ⚠️ Burada yutmak ayrıca ZORUNLU: bu uç hesap sızdırmamak
+                // için her durumda aynı cevabı dönüyor. Mail hatası 500'e
+                // dönüşseydi, "500 aldım demek ki bu e-posta kayıtlı"
+                // çıkarımı yapılabilirdi — aşağıdaki genel mesajın koruduğu
+                // bilgi tam da böyle sızardı.
+                await _email.GuvenliGonderAsync(
+                    _log,
+                    kullanici.Email,
+                    new ETicaretAPI.Services.EmailIcerik("Şifre Sıfırlama", govde),
+                    "SifreSifirlama");
             }
 
             // Her durumda aynı cevap
@@ -641,25 +688,31 @@ namespace ETicaretAPI.Controllers
             // Şifre değişikliği bir GÜVENLİK OLAYIDIR. Kullanıcı bunu
             // yapmadıysa haberdar olmalı — hesabı ele geçirilmiş demektir.
             //
-            // try/catch içinde: mail gönderilemezse şifre değişikliği
-            // GEÇERLİ kalmalı. Mail bir bildirimdir, işlemin parçası değil.
-            // Bunu yapmasaydık SMTP sunucusu çökünce kullanıcılar şifre
+            // Mail gönderilemezse şifre değişikliği GEÇERLİ kalmalı.
+            // Mail bir bildirimdir, işlemin parçası değil. Bunu
+            // yapmasaydık mail sağlayıcısı çökünce kullanıcılar şifre
             // değiştiremez hale gelirdi.
-            try
-            {
-                var govde =
-                    $"<p>Merhaba {kullanici.FullName},</p>" +
-                    "<p>Hesabının şifresi değiştirildi ve diğer tüm " +
-                    "cihazlardaki oturumların kapatıldı.</p>" +
-                    "<p>Bu işlemi sen yapmadıysan hemen \"Şifremi Unuttum\" " +
-                    "ile şifreni sıfırla.</p>";
+            //
+            // ⭐ DEĞİŞTİ — elle yazılmış `try { } catch { }` yerine
+            // GuvenliGonderAsync.
+            //
+            // ⚠️ Eski hâli istisnayı ÇIPLAK yutuyordu: loglama bile yoktu.
+            // Gönderim başarısız olduğunda bunu anlamanın hiçbir yolu
+            // yoktu — üstelik bu bir GÜVENLİK bildirimi, gitmediğini
+            // bilmek gerekiyor. Ortak sarmalayıcı LogError ile kaydediyor
+            // ve olay adını da yazıyor.
+            var sifreDegistiGovde =
+                $"<p>Merhaba {kullanici.FullName},</p>" +
+                "<p>Hesabının şifresi değiştirildi ve diğer tüm " +
+                "cihazlardaki oturumların kapatıldı.</p>" +
+                "<p>Bu işlemi sen yapmadıysan hemen \"Şifremi Unuttum\" " +
+                "ile şifreni sıfırla.</p>";
 
-                await _email.GonderAsync(kullanici.Email, "Şifren Değiştirildi", govde);
-            }
-            catch
-            {
-                // Sessizce yut — kullanıcının işlemi başarılı oldu.
-            }
+            await _email.GuvenliGonderAsync(
+                _log,
+                kullanici.Email,
+                new ETicaretAPI.Services.EmailIcerik("Şifren Değiştirildi", sifreDegistiGovde),
+                "SifreDegistirildi");
 
             return Ok(new
             {
@@ -938,26 +991,29 @@ namespace ETicaretAPI.Controllers
 
             // ---------- 8) VEDA MAİLİ ----------
             //
-            // Transaction'ın DIŞINDA ve try/catch içinde:
-            // mail gönderilemezse hesap kapatma GEÇERLİ kalmalı.
-            // Mail bir bildirimdir, işlemin parçası değil.
-            try
-            {
-                var govde =
-                    $"<p>Merhaba {eskiAd},</p>" +
-                    "<p>Hesabın kapatıldı ve kişisel bilgilerin " +
-                    "(adresler, kartlar, sepet, favoriler) silindi.</p>" +
-                    "<p>Yasal saklama yükümlülüğü nedeniyle geçmiş sipariş " +
-                    "kayıtların muhasebe kaydı olarak saklanmaya devam eder, " +
-                    "ancak artık kimliğinle ilişkilendirilemez.</p>" +
-                    "<p>Bu işlemi sen yapmadıysan hemen bizimle iletişime geç.</p>";
+            // Transaction'ın DIŞINDA: mail gönderilemezse hesap kapatma
+            // GEÇERLİ kalmalı. Mail bir bildirimdir, işlemin parçası değil.
+            //
+            // ⭐ DEĞİŞTİ — çıplak `catch { }` yerine GuvenliGonderAsync.
+            // Gerekçe şifre değiştirmedeki notta.
+            //
+            // ⚠️ Alıcı `eskiEmail`: kullanıcının e-postası yukarıda
+            // maskelendi, kaydın kendisinden okunamaz. Sarmalayıcı boş
+            // alıcıyı zaten atlıyor.
+            var vedaGovdesi =
+                $"<p>Merhaba {eskiAd},</p>" +
+                "<p>Hesabın kapatıldı ve kişisel bilgilerin " +
+                "(adresler, kartlar, sepet, favoriler) silindi.</p>" +
+                "<p>Yasal saklama yükümlülüğü nedeniyle geçmiş sipariş " +
+                "kayıtların muhasebe kaydı olarak saklanmaya devam eder, " +
+                "ancak artık kimliğinle ilişkilendirilemez.</p>" +
+                "<p>Bu işlemi sen yapmadıysan hemen bizimle iletişime geç.</p>";
 
-                await _email.GonderAsync(eskiEmail, "Hesabın Kapatıldı", govde);
-            }
-            catch
-            {
-                // Sessizce yut — kullanıcının işlemi başarılı oldu.
-            }
+            await _email.GuvenliGonderAsync(
+                _log,
+                eskiEmail,
+                new ETicaretAPI.Services.EmailIcerik("Hesabın Kapatıldı", vedaGovdesi),
+                "HesapKapatildi");
 
             return Ok(new
             {

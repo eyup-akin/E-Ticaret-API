@@ -48,9 +48,63 @@ builder.Services.AddCors(options =>
 builder.Services.AddScoped<ETicaretAPI.Services.TokenService>();
 
 
-// ⭐ YENİ — email göndericisi. Şimdilik dev (konsola basan) uygulamayı bağladık.
-// Canlıda bu satırı gerçek göndericiyle değiştireceğiz; başka hiçbir yer değişmeyecek.
-builder.Services.AddScoped<ETicaretAPI.Services.IEmailGonderici, ETicaretAPI.Services.KonsolEmailGonderici>();
+// ⭐⭐ DEĞİŞTİ — EMAIL GÖNDERİCİSİ ARTIK YAPILANDIRMADAN SEÇİLİYOR.
+//
+// Eskiden burada tek satırla KonsolEmailGonderici bağlıydı ve yorumunda
+// "canlıda bu satırı değiştireceğiz" yazıyordu. Değiştirmeyi hatırlamak
+// gereken bir satır, unutulacak bir satırdır: Production'da da konsola
+// basıyordu, yani DIŞARIDAN HİÇ KİMSE KAYIT TAMAMLAYAMIYORDU.
+//
+// ⚠️ SEÇİM ORTAMA (IsDevelopment) BAĞLANMADI, BİLEREK.
+//
+//   • Geliştirmede gerçek gönderimi denemek gerekiyor — HTML'in posta
+//     kutusunda nasıl göründüğü ancak öyle görülür.
+//   • Production'da anahtar unutulursa sessizce konsola düşmesini
+//     İSTEMİYORUZ; bugünkü hatanın kendisi tam olarak bu.
+//
+// Bu yüzden seçim açık bir ayar ("konsol" | "brevo") ve eksik
+// yapılandırma aşağıda AÇIKÇA PATLIYOR.
+var emailSaglayici = (builder.Configuration["Email:Saglayici"] ?? "konsol").Trim().ToLowerInvariant();
+
+if (emailSaglayici == "brevo")
+{
+    // ⚠️ ANAHTAR YOKSA UYGULAMA AÇILMIYOR.
+    //
+    // Sessizce konsola düşseydi "mail gitti" sanılırdı ve kimse fark
+    // etmezdi. Aynı karar mobilde de verilmiş (services/config.js):
+    // "Eksik yapılandırma açıkça patlasın."
+    if (string.IsNullOrWhiteSpace(builder.Configuration["Email:ApiAnahtari"]))
+    {
+        throw new InvalidOperationException(
+            "Email:Saglayici 'brevo' ama Email:ApiAnahtari boş. " +
+            "Geliştirmede appsettings.Development.json'a, Docker'da .env " +
+            "dosyasına ekle (Email__ApiAnahtari). Konsola basmaya devam " +
+            "etmek istiyorsan Email:Saglayici'yi 'konsol' yap.");
+    }
+
+    // ⚠️ Gönderen adres de zorunlu: Brevo doğrulanmamış bir adresten
+    // göndermiyor ve boş gönderirsek hata ancak İLK MAİL DENEMESİNDE
+    // ortaya çıkardı — yani kayıt olan ilk gerçek kullanıcıda.
+    if (string.IsNullOrWhiteSpace(builder.Configuration["Email:GonderenAdres"]))
+    {
+        throw new InvalidOperationException(
+            "Email:Saglayici 'brevo' ama Email:GonderenAdres boş. " +
+            "Brevo panelinde doğrulanmış gönderen adresini yaz.");
+    }
+
+    // Timeout ŞART: varsayılan 100 saniye ve e-postalar (StokaGeldi
+    // hariç) istek içinde senkron gidiyor. Brevo yanıt vermezse
+    // müşterinin sipariş isteği dakikalarca asılı kalırdı.
+    builder.Services.AddHttpClient(ETicaretAPI.Services.BrevoEmailGonderici.IstemciAdi,
+        istemci => istemci.Timeout = TimeSpan.FromSeconds(10));
+
+    builder.Services.AddScoped<ETicaretAPI.Services.IEmailGonderici, ETicaretAPI.Services.BrevoEmailGonderici>();
+}
+else
+{
+    // Geliştirme göndericisi: maili konteyner günlüğüne basar.
+    builder.Services.AddScoped<ETicaretAPI.Services.IEmailGonderici, ETicaretAPI.Services.KonsolEmailGonderici>();
+}
 
 // ⭐ YENİ — e-posta şablon üreticisi.
 //

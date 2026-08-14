@@ -48,7 +48,12 @@ namespace ETicaretAPI.Services
             _log = log;
         }
 
-        public async Task GonderAsync(string aliciEmail, string konu, string govdeHtml)
+        // ⭐ DEĞİŞTİ — messageId döndürüyor ve olayAdi alıyor (EmailKaydi için).
+        // ⚠️ olayAdi burada KULLANILMIYOR: gönderim kararını etkilemiyor,
+        // yalnızca arayüz sözleşmesinin parçası. Kaydı yazan katman
+        // KayitTutanEmailGonderici.
+        public async Task<string?> GonderAsync(
+            string aliciEmail, string konu, string govdeHtml, string olayAdi)
         {
             var apiAnahtari = _config["Email:ApiAnahtari"] ?? string.Empty;
             var gonderenAdres = _config["Email:GonderenAdres"] ?? string.Empty;
@@ -133,6 +138,34 @@ namespace ETicaretAPI.Services
                 throw new HttpRequestException(
                     "Brevo e-postayı kabul etmedi (HTTP " + (int)cevap.StatusCode + ").");
             }
+
+            // ⭐ YENİ — SAĞLAYICI MESAJ KİMLİĞİ.
+            //
+            // Brevo başarılı cevapta {"messageId":"<...@smtp-relay...>"}
+            // döndürüyor. Bu kimlik, "biz gönderdik" iddiasının tek
+            // dayanağı: Brevo panelindeki teslimat kaydıyla eşleştirmek
+            // ancak onunla mümkün.
+            //
+            // ⚠️ Ayrıştırma HATASI GÖNDERİMİ BOZMAMALI — mail çoktan
+            // gitti. Kimliği okuyamamak bir kayıt eksikliği, gönderim
+            // hatası değil; istisna fırlatsaydık çağıran taraf gitmiş bir
+            // maili "gitmedi" diye kaydederdi.
+            try
+            {
+                using var belge = JsonDocument.Parse(
+                    await cevap.Content.ReadAsStringAsync());
+
+                if (belge.RootElement.TryGetProperty("messageId", out var kimlik))
+                {
+                    return kimlik.GetString();
+                }
+            }
+            catch (JsonException)
+            {
+                _log.LogWarning("Brevo cevabından messageId okunamadı.");
+            }
+
+            return null;
         }
     }
 }

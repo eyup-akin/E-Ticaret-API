@@ -958,10 +958,11 @@ namespace ETicaretAPI.Controllers
 
                 // ⭐ YENİ (Aşama 10) — onay kaydı AYNI TRANSACTION'DA.
                 // Sipariş varsa onayı da vardır; ikisi ayrılamaz.
+                // ⭐ DEĞİŞTİ — IP ortak yardımcıdan (IstemciAdresi).
                 await _onaylar.EkleAsync(
                     userId,
                     SozlesmeTipi.SiparisSozlesmeleri,
-                    HttpContext.Connection.RemoteIpAddress?.ToString(),
+                    ETicaretAPI.Support.IstemciAdresi.Oku(HttpContext),
                     siparis.Id);
 
                 // 7) Sipariş detaylarını siparişe bağla ve kaydet
@@ -2478,7 +2479,9 @@ namespace ETicaretAPI.Controllers
                 await _denetim.EkleAsync(
                     yapanId: GetUserId(),
                     hedefId: order.UserId,
-                    hedefAd: $"Sipariş {order.OrderNumber}",
+                    // ⭐ DEĞİŞTİ — etiket DenetimEtiketi'nden (iki nokta
+                    // şart; gerekçe DenetimEtiketi'nin başında).
+                    hedefAd: DenetimEtiketi.Siparis(order.OrderNumber),
                     islem: DenetimIslemi.SiparisIptalAdmin,
                     eski: eskiDurum,
                     yeni: $"{SiparisDurumlari.Iptal} — {order.CancelReason}");

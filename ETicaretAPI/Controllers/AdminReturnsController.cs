@@ -463,7 +463,11 @@ namespace ETicaretAPI.Controllers
                 await _denetim.EkleAsync(
                     yapanId: adminId,
                     hedefId: siparis.UserId,
-                    hedefAd: $"Sipariş {siparis.OrderNumber}",
+                    // ⭐ DEĞİŞTİ — etiket DenetimEtiketi'nden.
+                    // ⚠️ İki nokta ŞART: hesap kapatma akışı kişi adı ile
+                    // varlık etiketini ona bakarak ayırıyor. "Sipariş SP-1"
+                    // (iki noktasız) kişi adı sanılıp maskelenirdi.
+                    hedefAd: DenetimEtiketi.Siparis(siparis.OrderNumber),
                     islem: DenetimIslemi.ParaIadesi,
                     eski: talep.Durum,
                     yeni: $"{tutar:N2} TL iade edildi (talep #{talep.Id})");

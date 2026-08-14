@@ -64,6 +64,12 @@ namespace ETicaretAPI.Data
         // ⭐ YENİ (B2) — ana sayfa afişleri / kampanyalar
         public DbSet<Kampanya> Kampanyalar { get; set; }
 
+        // ⭐ YENİ — SİSTEM KAYITLARI (log tabloları).
+        // AuditLogs da bu ailenin üyesi; o zaten yukarıda tanımlı.
+        public DbSet<EmailKaydi> EmailKayitlari { get; set; }
+        public DbSet<GirisKaydi> GirisKayitlari { get; set; }
+        public DbSet<HataKaydi> HataKayitlari { get; set; }
+
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -987,6 +993,74 @@ namespace ETicaretAPI.Data
             // tarihe göre sıralıyor.
             modelBuilder.Entity<AuditLog>()
                 .HasIndex(l => l.CreatedAt);
+
+            // ⭐ YENİ — istemci adresi. 45 karakter: IPv6'nın en uzun
+            // hâli 39, IPv4-eşlenmiş biçim (::ffff:192.168.1.1) ile
+            // birlikte 45'i geçmiyor. 15 yazmak IPv6'yı sessizce kırpardı.
+            // (SozlesmeOnayi.IpAdresi ile aynı sınır.)
+            modelBuilder.Entity<AuditLog>()
+                .Property(l => l.IpAdresi)
+                .HasMaxLength(45);
+
+
+            // ============================================================
+            //  ⭐ YENİ — SİSTEM KAYITLARI (log tabloları)
+            //
+            //  ⚠️ Üçünde de CreatedAt indeksi var ve İKİ İŞİ birden
+            //  görüyor: ekrandaki tarih süzgeci ve gece temizliği
+            //  (WHERE CreatedAt < x). İndekssiz temizlik her gece tüm
+            //  tabloyu tarardı.
+            //
+            //  ⚠️ SPEKÜLATİF İNDEKS YOK. Olay/sonuç kolonlarına indeks
+            //  eklenmedi: her indeks INSERT'i yavaşlatır ve bunlar
+            //  ağırlıklı YAZILAN tablolar. Filtre gerçekten yavaşlarsa
+            //  o zaman eklenir.
+            // ============================================================
+
+            modelBuilder.Entity<EmailKaydi>(e =>
+            {
+                e.HasIndex(x => x.CreatedAt);
+
+                e.Property(x => x.Alici).HasMaxLength(256).IsRequired();
+                e.Property(x => x.Konu).HasMaxLength(250).IsRequired();
+
+                // Olay adı bazen ekleniyor ("SiparisDurumu:kargoda"),
+                // 60 rahat bir tavan.
+                e.Property(x => x.Olay).HasMaxLength(60).IsRequired();
+
+                e.Property(x => x.HataMesaji).HasMaxLength(1000);
+                e.Property(x => x.SaglayiciMesajId).HasMaxLength(120);
+
+                // ⚠️ GovdeHtml BİLEREK sınırsız (nvarchar(max)): mail
+                // gövdesi uzun ve yalnızca başarısız kayıtlarda dolu.
+                // Sınır koymak, tekrar gönderilecek maili kırpmak olurdu.
+            });
+
+            modelBuilder.Entity<GirisKaydi>(e =>
+            {
+                e.HasIndex(x => x.CreatedAt);
+
+                e.Property(x => x.Email).HasMaxLength(256).IsRequired();
+                e.Property(x => x.Sonuc).HasMaxLength(30).IsRequired();
+                e.Property(x => x.IpAdresi).HasMaxLength(45);
+            });
+
+            modelBuilder.Entity<HataKaydi>(e =>
+            {
+                e.HasIndex(x => x.CreatedAt);
+
+                e.Property(x => x.Yol).HasMaxLength(300).IsRequired();
+                e.Property(x => x.Yontem).HasMaxLength(10).IsRequired();
+                e.Property(x => x.Mesaj).HasMaxLength(1000).IsRequired();
+                e.Property(x => x.IpAdresi).HasMaxLength(45);
+
+                // ⚠️ YiginIzi sınırsız — kırpmak kök sebebi kesebilir.
+
+                // ⚠️ KullaniciId GERÇEK FK DEĞİL. Hata anında kullanıcı
+                // satırı silinmiş ya da token bayat olabilir; FK olsaydı
+                // hata kaydını yazma denemesi de patlardı — hata
+                // döngüsünün ta kendisi.
+            });
 
         }
     }

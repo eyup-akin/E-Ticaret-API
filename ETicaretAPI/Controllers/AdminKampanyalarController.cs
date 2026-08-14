@@ -30,10 +30,45 @@ namespace ETicaretAPI.Controllers
         private readonly AppDbContext _context;
         private readonly IWebHostEnvironment _env;
 
-        public AdminKampanyalarController(AppDbContext context, IWebHostEnvironment env)
+        // ⭐ YENİ — denetim kaydı. Afiş müşterinin ana sayfada gördüğü
+        // vitrin: "bu banner nereye gitti" sorusunun cevabı olmalı.
+        private readonly DenetimKaydi _denetim;
+
+        public AdminKampanyalarController(
+            AppDbContext context,
+            IWebHostEnvironment env,
+            DenetimKaydi denetim)
         {
             _context = context;
             _env = env;
+            _denetim = denetim;
+        }
+
+
+        // Token'dan admin kimliği. Uç [Authorize] altında; 0 savunma amaçlı.
+        private int AdminId()
+        {
+            var talep = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
+
+            return talep != null && int.TryParse(talep.Value, out var id) ? id : 0;
+        }
+
+
+        // ⚠️ Beyaz liste — varlık serialize edilmiyor.
+        // Aciklama (2000 karakter) bilerek dışarıda: eski ve yeni hâlini
+        // her kayda koymak denetimi metin arşivine çevirirdi.
+        private static Dictionary<string, object?> KampanyaDenetimAlanlari(Kampanya k)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["baslik"] = k.Baslik,
+                ["kisaAciklama"] = k.KisaAciklama,
+                ["bitisMetni"] = k.BitisMetni,
+                ["gorselUrl"] = k.GorselUrl,
+                ["kuponKodlari"] = k.KuponKodlari,
+                ["sira"] = k.Sira,
+                ["yayinda"] = k.AktifMi
+            };
         }
 
         // 🔴 GET /api/admin/kampanyalar
@@ -117,6 +152,18 @@ namespace ETicaretAPI.Controllers
             _context.Kampanyalar.Add(kampanya);
             await _context.SaveChangesAsync();
 
+            // ⭐ YENİ — DENETİM KAYDI.
+            // ⚠️ SaveChanges'ten SONRA: etikete giren Id ancak o zaman dolu.
+            await _denetim.EkleAsync(
+                yapanId: AdminId(),
+                hedefId: AdminId(),
+                hedefAd: DenetimEtiketi.Kampanya(kampanya.Id, kampanya.Baslik),
+                islem: DenetimIslemi.KampanyaEklendi,
+                eski: null,
+                yeni: DenetimDegeri.Yaz(KampanyaDenetimAlanlari(kampanya)));
+
+            await _context.SaveChangesAsync();
+
             return Ok(new { mesaj = "Kampanya oluşturuldu.", id = kampanya.Id });
         }
 
@@ -149,8 +196,25 @@ namespace ETicaretAPI.Controllers
             // gösterirken dosya diskte olmazdı: ekranda kırık resim.
             var eskiGorsel = kampanya.GorselUrl;
 
+            // ⚠️ Denetim için eski değerler, atamalardan ÖNCE.
+            var oncekiDegerler = KampanyaDenetimAlanlari(kampanya);
+
             kampanya.GorselUrl = dto.GorselUrl;
             Doldur(kampanya, dto);
+
+            var (degisenEski, degisenYeni) = DenetimDegeri.Degisenler(
+                oncekiDegerler, KampanyaDenetimAlanlari(kampanya));
+
+            if (degisenEski.Count > 0)
+            {
+                await _denetim.EkleAsync(
+                    yapanId: AdminId(),
+                    hedefId: AdminId(),
+                    hedefAd: DenetimEtiketi.Kampanya(kampanya.Id, kampanya.Baslik),
+                    islem: DenetimIslemi.KampanyaGuncellendi,
+                    eski: DenetimDegeri.Yaz(degisenEski),
+                    yeni: DenetimDegeri.Yaz(degisenYeni));
+            }
 
             await _context.SaveChangesAsync();
 
@@ -177,7 +241,21 @@ namespace ETicaretAPI.Controllers
                 return NotFound(new { mesaj = "Kampanya bulunamadı." });
             }
 
+            var oncekiDurum = kampanya.AktifMi;
             kampanya.AktifMi = dto.IsActive;
+
+            // ⚠️ Değişiklik yoksa kayıt da yok.
+            if (oncekiDurum != kampanya.AktifMi)
+            {
+                await _denetim.EkleAsync(
+                    yapanId: AdminId(),
+                    hedefId: AdminId(),
+                    hedefAd: DenetimEtiketi.Kampanya(kampanya.Id, kampanya.Baslik),
+                    islem: DenetimIslemi.KampanyaGuncellendi,
+                    eski: DenetimDegeri.Yaz("yayinda", oncekiDurum),
+                    yeni: DenetimDegeri.Yaz("yayinda", kampanya.AktifMi));
+            }
+
             await _context.SaveChangesAsync();
 
             return Ok(new
@@ -240,6 +318,16 @@ namespace ETicaretAPI.Controllers
             // bağlı değil — kuponlar kendi tablosunda duruyor ve
             // kampanya silinince onlara bir şey olmuyor.
             _context.Kampanyalar.Remove(kampanya);
+
+            // ⭐ YENİ — DENETİM KAYDI, satır silinmeden önce.
+            await _denetim.EkleAsync(
+                yapanId: AdminId(),
+                hedefId: AdminId(),
+                hedefAd: DenetimEtiketi.Kampanya(kampanya.Id, kampanya.Baslik),
+                islem: DenetimIslemi.KampanyaSilindi,
+                eski: DenetimDegeri.Yaz(KampanyaDenetimAlanlari(kampanya)),
+                yeni: null);
+
             await _context.SaveChangesAsync();
 
             // Dosya, kayıt gittikten SONRA siliniyor: sıra tersi olsaydı

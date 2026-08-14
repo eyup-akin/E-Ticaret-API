@@ -17,10 +17,18 @@ namespace ETicaretAPI.Controllers
 
         private const long MaxDosyaBoyutu = 10 * 1024 * 1024; // 10 MB
 
-        public ImportsController(AppDbContext context, IWebHostEnvironment env)
+        // ⭐ YENİ — denetim kaydı. İçe aktarma tek istekte yüzlerce ürünün
+        // fiyatını ve stoğunu değiştirebiliyor; en çok iz gerektiren işlem.
+        private readonly DenetimKaydi _denetim;
+
+        public ImportsController(
+            AppDbContext context,
+            IWebHostEnvironment env,
+            DenetimKaydi denetim)
         {
             _context = context;
             _env = env;
+            _denetim = denetim;
         }
 
         // 🔴 POST /api/imports/products   (multipart/form-data, alan adı: dosya)
@@ -66,6 +74,31 @@ namespace ETicaretAPI.Controllers
             };
 
             _context.ImportJobs.Add(job);
+            await _context.SaveChangesAsync();
+
+            // ⭐ YENİ — DENETİM KAYDI: BAŞLATMA ANI.
+            //
+            // ⚠️ SATIR SAYISI BURADA HENÜZ BİLİNMİYOR — dosya arka planda
+            // okunuyor. Uydurmak yerine yazmıyoruz; sonuç sayıları
+            // (Total/Success/Failed) ImportJob satırında duruyor ve
+            // buradaki işId ile ona ulaşılıyor. "Veri yoksa uydurulmaz."
+            //
+            // ⚠️ Enqueue'dan ÖNCE ve kendi SaveChanges'iyle: kayıt
+            // yazılamazsa iş de başlamasın. Ters sırada olsaydı yüzlerce
+            // ürünü değiştiren bir iş izsiz çalışabilirdi.
+            await _denetim.EkleAsync(
+                yapanId: KullaniciId() ?? 0,
+                hedefId: KullaniciId() ?? 0,
+                hedefAd: DenetimEtiketi.IceAktarma(job.Id, job.FileName),
+                islem: DenetimIslemi.IceAktarmaBaslatildi,
+                eski: null,
+                yeni: DenetimDegeri.Yaz(new Dictionary<string, object?>
+                {
+                    ["dosya"] = job.FileName,
+                    ["boyutBayt"] = dosya.Length,
+                    ["isId"] = job.Id
+                }));
+
             await _context.SaveChangesAsync();
 
             // 3) Hangfire kuyruğuna at

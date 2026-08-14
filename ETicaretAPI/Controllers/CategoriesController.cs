@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using ETicaretAPI.Data;
 using ETicaretAPI.Models;
 using ETicaretAPI.DTOs;
+using ETicaretAPI.Services;   // ⭐ YENİ — denetim kaydı
 
 namespace ETicaretAPI.Controllers
 {
@@ -13,9 +14,23 @@ namespace ETicaretAPI.Controllers
     {
         private readonly AppDbContext _context;
 
-        public CategoriesController(AppDbContext context)
+        // ⭐ YENİ — denetim kaydı. Kategori değişikliği ürünlerin
+        // müşteride nerede göründüğünü belirliyor; sessiz kalmamalı.
+        private readonly DenetimKaydi _denetim;
+
+        public CategoriesController(AppDbContext context, DenetimKaydi denetim)
         {
             _context = context;
+            _denetim = denetim;
+        }
+
+
+        // Token'dan admin kimliği. Yazma uçları [Authorize] altında.
+        private int AdminId()
+        {
+            var talep = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
+
+            return talep != null && int.TryParse(talep.Value, out var id) ? id : 0;
         }
 
         // 🟢 GET /api/categories
@@ -102,6 +117,17 @@ namespace ETicaretAPI.Controllers
             _context.Categories.Add(category);
             await _context.SaveChangesAsync();
 
+            // ⭐ YENİ — DENETİM KAYDI. ⚠️ SaveChanges'ten sonra: Id lazım.
+            await _denetim.EkleAsync(
+                yapanId: AdminId(),
+                hedefId: AdminId(),
+                hedefAd: DenetimEtiketi.Kategori(category.Id, category.Name),
+                islem: DenetimIslemi.KategoriEklendi,
+                eski: null,
+                yeni: DenetimDegeri.Yaz("ad", category.Name));
+
+            await _context.SaveChangesAsync();
+
             return Ok(new { mesaj = "Kategori eklendi biladerim!", id = category.Id });
         }
 
@@ -122,7 +148,22 @@ namespace ETicaretAPI.Controllers
                 return NotFound(new { mesaj = "Güncellenecek kategori bulunamadı!" });
             }
 
+            var eskiAd = category.Name;
             category.Name = dto.Name;
+
+            // ⚠️ Ad değişmediyse kayıt yok — aynı adı tekrar kaydetmek
+            // bir değişiklik değil.
+            if (eskiAd != category.Name)
+            {
+                await _denetim.EkleAsync(
+                    yapanId: AdminId(),
+                    hedefId: AdminId(),
+                    hedefAd: DenetimEtiketi.Kategori(category.Id, category.Name),
+                    islem: DenetimIslemi.KategoriGuncellendi,
+                    eski: DenetimDegeri.Yaz("ad", eskiAd),
+                    yeni: DenetimDegeri.Yaz("ad", category.Name));
+            }
+
             await _context.SaveChangesAsync();
 
             return Ok(new { mesaj = "Kategori güncellendi biladerim!" });
@@ -155,6 +196,16 @@ namespace ETicaretAPI.Controllers
             }
 
             _context.Categories.Remove(category);
+
+            // ⭐ YENİ — DENETİM KAYDI, satır silinmeden önce.
+            await _denetim.EkleAsync(
+                yapanId: AdminId(),
+                hedefId: AdminId(),
+                hedefAd: DenetimEtiketi.Kategori(category.Id, category.Name),
+                islem: DenetimIslemi.KategoriSilindi,
+                eski: DenetimDegeri.Yaz("ad", category.Name),
+                yeni: null);
+
             await _context.SaveChangesAsync();
 
             return Ok(new { mesaj = "Kategori silindi biladerim!" });

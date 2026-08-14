@@ -41,18 +41,22 @@
             EmailIcerik icerik,
             string olayAdi)
         {
-            // Alıcı adresi yoksa denemeye bile gerek yok.
-            // (Hesabı kapatılmış kullanıcıların e-postası maskeleniyor.)
-            if (string.IsNullOrWhiteSpace(aliciEmail))
-            {
-                logger.LogWarning(
-                    "E-posta atlandı — alıcı adresi boş. Olay: {Olay}", olayAdi);
-                return;
-            }
+            // ⭐ DEĞİŞTİ — "alıcı adresi boş" kontrolü buradan
+            // KayitTutanEmailGonderici'ye taşındı.
+            //
+            // ⚠️ Sebep: burada eleseydik atlanan gönderim EmailKayitlari
+            // tablosuna hiç düşmezdi — panelde "neden mail gitmedi"
+            // sorusunun cevabı yine yalnızca konteyner günlüğünde kalırdı,
+            // ki bu tabloyu açmanın sebebi tam olarak buydu.
+            // Kural tek yerde: sarmalayıcıda.
 
             try
             {
-                await gonderici.GonderAsync(aliciEmail, icerik.Konu, icerik.GovdeHtml);
+                // ⭐ DEĞİŞTİ — olayAdi artık göndericiye de geçiyor.
+                // Kaydı yazan katman (KayitTutanEmailGonderici) arayüzün
+                // ARDINDA duruyor ve olayı başka türlü öğrenemezdi.
+                await gonderici.GonderAsync(
+                    aliciEmail, icerik.Konu, icerik.GovdeHtml, olayAdi);
             }
             catch (Exception hata)
             {

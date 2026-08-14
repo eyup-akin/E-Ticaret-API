@@ -37,6 +37,12 @@ namespace ETicaretAPI.Controllers
         // ⭐ YENİ — kombin ve "birlikte alınanlar" önerileri
         private readonly KombinServisi _kombin;
 
+        // ⭐ YENİ — denetim kaydı.
+        //
+        // ⚠️ Bu controller PARAYA VE ENVANTERE dokunuyor (fiyat, stok,
+        // silme) ve bugüne kadar hiçbir işlemi kayda geçmiyordu.
+        private readonly DenetimKaydi _denetim;
+
 
         // ⭐ YENİ (7.4) — ana sayfada bölüm başına ürün sayısı.
         //
@@ -70,7 +76,8 @@ namespace ETicaretAPI.Controllers
             IHttpClientFactory httpFactory,
             StokDefteri defter,              // ⭐ YENİ
             MagazaAyarlari ayarlar,
-            KombinServisi kombin)            // ⭐ YENİ
+            KombinServisi kombin,            // ⭐ YENİ
+            DenetimKaydi denetim)            // ⭐ YENİ
         {
             _context = context;
             _env = env;
@@ -78,7 +85,48 @@ namespace ETicaretAPI.Controllers
             _defter = defter;                // ⭐ YENİ
             _ayarlar = ayarlar;              // ⭐ YENİ
             _kombin = kombin;                // ⭐ YENİ
+            _denetim = denetim;              // ⭐ YENİ
         }
+
+
+        // Denetim kaydındaki okunur ad. ⚠️ Etiket biçimi ortak serviste
+        // (DenetimEtiketi) — indirim controller'ı ikinci tüketici oldu.
+        private static string UrunEtiketi(Product urun)
+        {
+            return DenetimEtiketi.Urun(urun.Id, urun.Name);
+        }
+
+
+        // ⭐ YENİ — DENETİME YAZILACAK ALANLARIN BEYAZ LİSTESİ
+        //
+        // ⚠️⚠️ VARLIĞI SERIALIZE ETMİYORUZ. JsonSerializer.Serialize(urun)
+        // yazmak cazip ama Product'a yarın eklenecek herhangi bir alan
+        // (bir sağlayıcı anahtarı, bir iç not) sessizce log'a düşerdi.
+        // Beyaz liste, yeni alanların VARSAYILAN OLARAK yazılmamasını
+        // sağlıyor.
+        //
+        // ⚠️ Açıklama bilerek dışarıda: 2000 karakterlik metnin eski ve
+        // yeni hâlini her kayda koymak, denetim tablosunu ürün
+        // açıklamalarının ikinci kopyası hâline getirirdi.
+        private static Dictionary<string, object?> UrunDenetimAlanlari(Product urun)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["ad"] = urun.Name,
+                ["barkod"] = urun.Barcode,
+                ["fiyat"] = urun.Price,
+                ["eskiFiyat"] = urun.EskiFiyat,
+                ["maliyet"] = urun.Cost,
+                ["stok"] = urun.Stock,
+                ["kdvOrani"] = urun.VatRate,
+                ["kategoriId"] = urun.CategoryId,
+                ["satista"] = urun.IsActive
+            };
+        }
+
+
+        // ⚠️ Karşılaştırma DenetimDegeri.Degisenler'e taşındı: kupon
+        // güncelleme ikinci tüketici oldu ve iki kopya ayrışabilirdi.
 
 
         // ⭐ YENİ — MÜŞTERİYE GİDEN STOK BİLGİSİNİ HAZIRLA
@@ -1841,7 +1889,29 @@ namespace ETicaretAPI.Controllers
                 referansId: null,
                 aciklama: "Ürün oluşturuldu");
 
-            await _context.SaveChangesAsync();   // 2. yazma → stok hareketi
+            // ⭐ YENİ — DENETİM KAYDI, AYNI TRANSACTION'DA.
+            //
+            // ⚠️ hedefId adminin kendisi: ürünün "etkilenen kullanıcısı"
+            // yok. Sözleşme güncellemesinde alınan kararın aynısı —
+            // ekrandaki kişi bağlantısı böylece geçerli kalıyor.
+            //
+            // ⚠️ Alanlar ELLE seçiliyor, varlık serialize EDİLMİYOR.
+            await _denetim.EkleAsync(
+                yapanId: GetUserId() ?? 0,
+                hedefId: GetUserId() ?? 0,
+                hedefAd: UrunEtiketi(product),
+                islem: DenetimIslemi.UrunEklendi,
+                eski: null,
+                yeni: DenetimDegeri.Yaz(new Dictionary<string, object?>
+                {
+                    ["fiyat"] = product.Price,
+                    ["maliyet"] = product.Cost,
+                    ["stok"] = product.Stock,
+                    ["kdvOrani"] = product.VatRate,
+                    ["satista"] = product.IsActive
+                }));
+
+            await _context.SaveChangesAsync();   // 2. yazma → stok hareketi + denetim
             await transaction.CommitAsync();     // ikisi birlikte kesinleşti
 
             // id'yi döndürüyoruz — panel bunu alıp hemen resim yükleyecek
@@ -1882,6 +1952,14 @@ namespace ETicaretAPI.Controllers
             //    Sonradan okusaydık miktar hep 0 çıkardı ve Ekle() hiçbir
             //    kayıt yazmazdı — patlamayan, sessiz bir hata. En kötüsü.
             var eskiStok = product.Stock;
+
+            // ⭐ YENİ — DENETİM İÇİN ESKİ DEĞERLERİN KOPYASI.
+            //
+            // ⚠️ Aynı gerekçe eskiStok'unkiyle bir: aşağıdaki atamalar
+            // çalıştığı an eski değerler bellekten kayboluyor. Sonradan
+            // okusaydık "100 → 100" yazan, hiçbir şey anlatmayan bir
+            // kayıt üretirdik.
+            var oncekiDegerler = UrunDenetimAlanlari(product);
 
             product.Name = dto.Name;
             product.Barcode = barkod;
@@ -1926,6 +2004,36 @@ namespace ETicaretAPI.Controllers
                 referansTipi: null,
                 referansId: null,
                 aciklama: "Ürün formundan güncellendi");
+
+            // ⭐ YENİ — DENETİM KAYDI: YALNIZCA DEĞİŞEN ALANLAR.
+            //
+            // ⚠️ Değişmeyen alanları da yazsaydık her "Kaydet"
+            // tıklamasında dolu bir kayıt oluşurdu ve gerçek fiyat
+            // değişikliği o gürültünün içinde kaybolurdu. Hiçbir şey
+            // değişmediyse hiç kayıt yazılmıyor — StokDefteri'nin
+            // "miktar 0 ise yazma" kuralının aynısı.
+            var sonrakiDegerler = UrunDenetimAlanlari(product);
+            var (degisenEski, degisenYeni) =
+                DenetimDegeri.Degisenler(oncekiDegerler, sonrakiDegerler);
+
+            if (degisenEski.Count > 0)
+            {
+                await _denetim.EkleAsync(
+                    yapanId: GetUserId() ?? 0,
+                    hedefId: GetUserId() ?? 0,
+                    hedefAd: UrunEtiketi(product),
+
+                    // ⚠️ Stok değiştiyse işlem "stok düzeltildi" olarak
+                    // etiketleniyor: envanter hareketi, fiyat/ad
+                    // değişikliğinden farklı bir soruya cevap veriyor ve
+                    // denetim ekranında ayrı süzülebilmeli.
+                    islem: degisenEski.ContainsKey("stok") && degisenEski.Count == 1
+                        ? DenetimIslemi.StokDuzeltildi
+                        : DenetimIslemi.UrunGuncellendi,
+
+                    eski: DenetimDegeri.Yaz(degisenEski),
+                    yeni: DenetimDegeri.Yaz(degisenYeni));
+            }
 
             // ⭐ TEK SaveChanges — ve bu yeterli.
             //
@@ -1980,6 +2088,23 @@ namespace ETicaretAPI.Controllers
             {
                 urun.IsActive = false;
             }
+
+            // ⭐ YENİ — DENETİM KAYDI.
+            // Arşiv, ürünü müşteriden de admin listesinden de kaldırıyor;
+            // "bu ürün neden kayboldu" sorusu ancak burada cevaplanır.
+            await _denetim.EkleAsync(
+                yapanId: GetUserId() ?? 0,
+                hedefId: GetUserId() ?? 0,
+                hedefAd: UrunEtiketi(urun),
+                islem: dto.IsActive
+                    ? DenetimIslemi.UrunArsivlendi
+                    : DenetimIslemi.UrunArsivdenCikarildi,
+                eski: null,
+                yeni: DenetimDegeri.Yaz(new Dictionary<string, object?>
+                {
+                    ["arsivlendi"] = urun.ArsivlendiMi,
+                    ["satista"] = urun.IsActive
+                }));
 
             await _context.SaveChangesAsync();
 
@@ -2150,6 +2275,20 @@ namespace ETicaretAPI.Controllers
             await _context.StockAlerts.Where(s => s.ProductId == id).ExecuteDeleteAsync();
 
             _context.Products.Remove(product);
+
+            // ⭐ YENİ — DENETİM KAYDI, SATIR SİLİNMEDEN ÖNCE HAZIRLANIYOR.
+            //
+            // ⚠️ Ürünün değerleri kayda KOPYALANIYOR: satır birazdan
+            // gidiyor ve geriye "neyi sildik" sorusunun tek cevabı bu
+            // kayıt kalıyor. Buraya id yazıp ürüne bakmayı planlamak
+            // işe yaramazdı — bakılacak ürün kalmıyor.
+            await _denetim.EkleAsync(
+                yapanId: GetUserId() ?? 0,
+                hedefId: GetUserId() ?? 0,
+                hedefAd: UrunEtiketi(product),
+                islem: DenetimIslemi.UrunSilindi,
+                eski: DenetimDegeri.Yaz(UrunDenetimAlanlari(product)),
+                yeni: null);
 
             await _context.SaveChangesAsync();
 

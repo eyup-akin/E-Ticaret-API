@@ -71,6 +71,10 @@ namespace ETicaretAPI.Controllers
         // AdminKampanyalarController ile aynı gerekçe.)
         private readonly IWebHostEnvironment _env;
 
+        // ⭐ YENİ — giriş denemelerinin kalıcı kaydı.
+        // ⚠️ Kendi kapsamında yazıyor: log yazma hatası girişi bozmasın.
+        private readonly ETicaretAPI.Services.SistemGunlugu _gunluk;
+
         public AuthController(
             AppDbContext context,
             ETicaretAPI.Services.TokenService tokenService,
@@ -78,7 +82,8 @@ namespace ETicaretAPI.Controllers
             IConfiguration config,                        // ⭐ YENİ
             ETicaretAPI.Services.SozlesmeOnayServisi onayServisi,   // ⭐ YENİ (Aşama 10)
             ILogger<AuthController> log,                  // ⭐ YENİ
-            IWebHostEnvironment env)                      // ⭐ YENİ
+            IWebHostEnvironment env,                      // ⭐ YENİ
+            ETicaretAPI.Services.SistemGunlugu gunluk)    // ⭐ YENİ
         {
             _context = context;
             _tokenService = tokenService;
@@ -87,6 +92,7 @@ namespace ETicaretAPI.Controllers
             _onayServisi = onayServisi;
             _log = log;         // ⭐ YENİ
             _env = env;         // ⭐ YENİ
+            _gunluk = gunluk;   // ⭐ YENİ
         }
 
         // POST /api/auth/register
@@ -165,10 +171,12 @@ namespace ETicaretAPI.Controllers
                 // ⭐ YENİ (Aşama 10) — onay kaydı.
                 // Kullanıcı kaydedildikten SONRA: onay satırı UserId'ye
                 // FK ile bağlı, kullanıcı olmadan yazılamaz.
+                // ⭐ DEĞİŞTİ — IP artık ortak yardımcıdan (IstemciAdresi).
+                // Vekil kuralı değişirse tek yerde değişsin diye.
                 await _onayServisi.EkleAsync(
                     yeniKullanici.Id,
                     SozlesmeTipi.KayitSozlesmeleri,
-                    HttpContext.Connection.RemoteIpAddress?.ToString());
+                    ETicaretAPI.Support.IstemciAdresi.Oku(HttpContext));
 
                 await _context.SaveChangesAsync();
             }
@@ -421,18 +429,39 @@ namespace ETicaretAPI.Controllers
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginDto dto)
         {
+            // ⭐ YENİ — GİRİŞ KAYDI.
+            //
+            // Bugüne kadar yalnızca bir SAYAÇ vardı (YanlisGirisSayisi) ve
+            // o sayaç başarılı girişte sıfırlanıyor: "bu hesaba dün gece
+            // 40 kez denendi" sorusu cevaplanamıyordu.
+            //
+            // ⚠️ Şifre HİÇBİR dalda yazılmıyor — yanlış girilen bile.
+            // Yanlış şifre çoğu zaman kullanıcının BAŞKA bir hesaptaki
+            // doğru şifresidir.
+            var ip = ETicaretAPI.Support.IstemciAdresi.Oku(HttpContext);
+
             var kullanici = await _context.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
 
             // Kullanıcı yoksa sayaç tutamayız (satır yok) → genel mesaj.
             // (Hesabın var olup olmadığını sızdırmamak için hep aynı cümle.)
             if (kullanici == null)
+            {
+                // ⚠️ Kayıtta "kullanici_yok" yazıyor ama CEVAP değişmiyor:
+                // hesabın varlığı yalnızca süperadmine açık bu tabloda
+                // görünüyor, istemciye sızmıyor.
+                await _gunluk.GirisYazAsync(dto.Email, GirisSonucu.KullaniciYok, ip);
+
                 return Unauthorized(new { mesaj = "Email veya şifre hatalı biladerim!" });
+            }
 
             // ⭐ KİLİT KONTROLÜ — şifreyi denemeden ÖNCE bak.
             // Kilitliyse doğru şifre bile içeri almaz; süre dolunca kendiliğinden açılır.
             if (kullanici.KilitBitis != null && kullanici.KilitBitis > DateTime.UtcNow)
             {
                 var kalan = (int)Math.Ceiling((kullanici.KilitBitis.Value - DateTime.UtcNow).TotalMinutes);
+
+                await _gunluk.GirisYazAsync(dto.Email, GirisSonucu.HesapKilitli, ip);
+
                 return Unauthorized(new
                 {
                     mesaj = $"Çok fazla hatalı deneme. Hesabın geçici kilitli, {kalan} dk sonra tekrar dene."
@@ -450,6 +479,8 @@ namespace ETicaretAPI.Controllers
                     kullanici.YanlisGirisSayisi = 0; // kilit sonrası temiz sayfa açalım
                     await _context.SaveChangesAsync();
 
+                    await _gunluk.GirisYazAsync(dto.Email, GirisSonucu.SifreYanlis, ip);
+
                     return Unauthorized(new
                     {
                         mesaj = $"Çok fazla hatalı deneme. Hesabın {KilitDakika} dk kilitlendi."
@@ -457,6 +488,9 @@ namespace ETicaretAPI.Controllers
                 }
 
                 await _context.SaveChangesAsync();
+
+                await _gunluk.GirisYazAsync(dto.Email, GirisSonucu.SifreYanlis, ip);
+
                 return Unauthorized(new { mesaj = "Email veya şifre hatalı biladerim!" });
             }
 
@@ -473,19 +507,33 @@ namespace ETicaretAPI.Controllers
             // "kod" alanı MAKİNE için: istemci bu durumu metne bakmadan ayırt etsin.
             // Mesaj metni ileride değişse bile kod sabit kalır, istemci kırılmaz.
             if (!kullanici.EmailDogrulandiMi)
+            {
+                await _gunluk.GirisYazAsync(dto.Email, GirisSonucu.Dogrulanmamis, ip);
+
                 return Unauthorized(new
                 {
                     mesaj = "Önce email adresini doğrulaman gerekiyor. Kutunu (ve konsolu) kontrol et.",
                     kod = "EMAIL_DOGRULANMADI"
                 });
+            }
 
 
             if (!kullanici.IsActive)
+            {
+                await _gunluk.GirisYazAsync(dto.Email, GirisSonucu.HesapPasif, ip);
+
                 return Unauthorized(new { mesaj = "Hesabın devre dışı bırakılmış. Lütfen yönetici ile iletişime geç." });
+            }
 
             // Access (15 dk) + refresh (30 gün) üret
             var accessToken = _tokenService.TokenUret(kullanici);
             var refreshToken = await RefreshUretVeKaydet(kullanici.Id);
+
+            // ⚠️ BAŞARILI GİRİŞ DE KAYDEDİLİYOR, yalnızca başarısızlar
+            // değil. "Bu hesaba nereden girildi" sorusu, hesap ele
+            // geçirildiğinde sorulan ilk soru; yalnızca başarısızları
+            // tutan bir tablo onu cevaplayamaz.
+            await _gunluk.GirisYazAsync(dto.Email, GirisSonucu.Basarili, ip);
 
             return Ok(new
             {
@@ -1008,7 +1056,69 @@ namespace ETicaretAPI.Controllers
                     .Where(t => t.UserId == userId)
                     .ExecuteDeleteAsync();
 
-                // ---------- 7) KULLANICIYI ANONİMLEŞTİR ----------
+                // ---------- 7) DENETİM KAYDINDAKİ ADI MASKELE ----------
+                //
+                // ⚠️ ⭐ YENİ — BU ADIM EKSİKTİ VE SESSİZ BİR KVKK AÇIĞIYDI.
+                //
+                // AuditLog.ActorName ve TargetName DONMUŞ KOPYALAR:
+                // aşağıdaki anonimleştirme onlara işlemiyor ve kişisel
+                // veri denetim tablosunda kalmaya devam ediyordu.
+                //
+                // ⚠️ İKİ ALAN DA maskeleniyor. Yalnızca birini yapmak işe
+                // yaramazdı: müşteri genelde TargetName, admin ise
+                // ActorName tarafında duruyor ve hangisi olduğu hesabı
+                // kapatan kişiye göre değişiyor.
+                //
+                // ⚠️ AYNI TRANSACTION'DA. Ayrı olsaydı hesap kapanır ama
+                // maskeleme patlarsa kişisel veri tabloda kalırdı.
+                //
+                // ⚠️ YAZARKEN maskeleniyor, okurken değil: veri kalıcı
+                // olarak gidiyor. "Gizlenmiş ama duran" veri KVKK'nın
+                // silme hakkını karşılamıyor. Bedeli bilinçli kabul
+                // edildi — adli bir talepte "bu işlemi kim yaptı" sorusu
+                // isimle cevaplanamayacak.
+                //
+                // ⚠️ ActorUserId MASKELENMİYOR. Ad kişisel veri, kimlik
+                // numarası ise iç referans; ikisini birden silmek kaydı
+                // anlamsız bırakırdı ("birileri fiyatı değiştirdi").
+                // Kullanıcı satırı zaten anonimleştiği için o id bir
+                // kişiye geri götürmüyor.
+                var maskeliAd = ETicaretAPI.Support.Maskeleme.Ad(kullanici.FullName);
+
+                // ActorName HER ZAMAN bir kişi adı: DenetimKaydi onu
+                // Users.FullName'den okuyor. Koşulsuz maskeleniyor.
+                await _context.AuditLogs
+                    .Where(l => l.ActorUserId == userId)
+                    .ExecuteUpdateAsync(s => s.SetProperty(l => l.ActorName, maskeliAd));
+
+                // ⚠️⚠️ TargetName HER ZAMAN KİŞİ ADI DEĞİL.
+                //
+                // Bazı kayıtlarda VARLIK ETİKETİ taşıyor:
+                // "Ürün: Kahve (#42)", "Sipariş SP-260814-1", "Kupon: YAZ25".
+                // Hepsini maskeleseydik o etiketler "E***" olur ve
+                // denetim kaydı hangi ürüne/siparişe ait olduğunu
+                // kaybederdi — kişisel veriyi silerken TİCARİ bilgiyi de
+                // silmek olurdu.
+                //
+                // Ayrım ":" karakteri: varlık etiketlerinin tamamı
+                // DenetimEtiketi üzerinden üretiliyor ve hepsi
+                // "Tür: değer" biçiminde. Kişi adında iki nokta olmaz.
+                //
+                // ⚠️ BU YÜZDEN YENİ BİR VARLIK ETİKETİ ELLE YAZILMAMALI —
+                // DenetimEtiketi'ne eklenmeli. Aksi hâlde buradaki kural
+                // sessizce onu kişi adı sanar ve maskeler.
+                //
+                // ⚠️ "Sipariş " öneki ESKİ SATIRLAR için: etiket eskiden
+                // iki noktasız yazılıyordu ("Sipariş SP-260814-1") ve o
+                // satırlar veritabanında duruyor. Bugünkü kod iki noktalı
+                // yazıyor; bu koşul yalnızca geçmişi koruyor.
+                await _context.AuditLogs
+                    .Where(l => l.TargetUserId == userId
+                             && !l.TargetName.Contains(":")
+                             && !l.TargetName.StartsWith("Sipariş "))
+                    .ExecuteUpdateAsync(s => s.SetProperty(l => l.TargetName, maskeliAd));
+
+                // ---------- 8) KULLANICIYI ANONİMLEŞTİR ----------
 
                 kullanici.FullName = "Silinmiş Kullanıcı";
 

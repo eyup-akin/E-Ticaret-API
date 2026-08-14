@@ -98,12 +98,28 @@ if (emailSaglayici == "brevo")
     builder.Services.AddHttpClient(ETicaretAPI.Services.BrevoEmailGonderici.IstemciAdi,
         istemci => istemci.Timeout = TimeSpan.FromSeconds(10));
 
-    builder.Services.AddScoped<ETicaretAPI.Services.IEmailGonderici, ETicaretAPI.Services.BrevoEmailGonderici>();
+    // ⭐ DEĞİŞTİ — arayüze DEĞİL, somut tipe kaydediliyor.
+    // IEmailGonderici'yi aşağıdaki sarmalayıcı üstleniyor.
+    builder.Services.AddScoped<ETicaretAPI.Services.BrevoEmailGonderici>();
+    builder.Services.AddScoped<ETicaretAPI.Services.IEmailGonderici>(sp =>
+        new ETicaretAPI.Services.KayitTutanEmailGonderici(
+            sp.GetRequiredService<ETicaretAPI.Services.BrevoEmailGonderici>(),
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            sp.GetRequiredService<ILogger<ETicaretAPI.Services.KayitTutanEmailGonderici>>()));
 }
 else
 {
     // Geliştirme göndericisi: maili konteyner günlüğüne basar.
-    builder.Services.AddScoped<ETicaretAPI.Services.IEmailGonderici, ETicaretAPI.Services.KonsolEmailGonderici>();
+    //
+    // ⚠️ KAYIT KONSOL GÖNDERİCİSİNDE DE TUTULUYOR. Yalnızca "brevo"
+    // dalına koysaydık geliştirmede tablo hep boş kalır, ekran hiç
+    // denenmemiş olurdu — ve ilk gerçek veri canlıda görülürdü.
+    builder.Services.AddScoped<ETicaretAPI.Services.KonsolEmailGonderici>();
+    builder.Services.AddScoped<ETicaretAPI.Services.IEmailGonderici>(sp =>
+        new ETicaretAPI.Services.KayitTutanEmailGonderici(
+            sp.GetRequiredService<ETicaretAPI.Services.KonsolEmailGonderici>(),
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            sp.GetRequiredService<ILogger<ETicaretAPI.Services.KayitTutanEmailGonderici>>()));
 }
 
 // ⭐ YENİ — e-posta şablon üreticisi.
@@ -127,6 +143,26 @@ builder.Services.AddScoped<ETicaretAPI.Services.RaporTarihi>();
 
 // ⭐ YENİ — stok hareket defteri yazıcısı
 builder.Services.AddScoped<ETicaretAPI.Services.StokDefteri>();
+
+// ⭐ YENİ — isteğin adresini servis katmanından okuyabilmek için.
+//
+// ⚠️ Controller'da HttpContext hazır ama DenetimKaydi bir SERVİS ve
+// Hangfire işlerinden de çağrılabiliyor. Accessor istek yokken null
+// döndürüyor; IP de o zaman null kalıyor — "bilinmiyor" demenin
+// doğru yolu bu.
+builder.Services.AddHttpContextAccessor();
+
+// ⭐ YENİ — giriş ve hata kayıtlarını yazan servis.
+//
+// ⚠️ Singleton: HataYakalamaMiddleware da singleton ve bunu alıyor.
+// Scoped olsaydı middleware onu constructor'ında alamazdı. Servis
+// zaten kendi DbContext kapsamını açıyor, paylaşılan durumu yok.
+builder.Services.AddSingleton<ETicaretAPI.Services.SistemGunlugu>();
+
+// ⭐ YENİ — log saklama süreleri (appsettings "Loglar" bölümü).
+// Singleton: durumu yok, sadece IConfiguration'a bakıyor
+// (MagazaAyarlari ile aynı gerekçe).
+builder.Services.AddSingleton<ETicaretAPI.Services.LogAyarlari>();
 
 // ⭐ YENİ — denetim kaydı yazıcısı.
 //
@@ -284,6 +320,9 @@ builder.Services.AddScoped<ETicaretAPI.Services.IceAktarmaServisi>();
 
 // ⭐ YENİ (5.5) — stok bildirim servisi (Hangfire kendi scope'unda üretecek)
 builder.Services.AddScoped<ETicaretAPI.Services.StokBildirimServisi>();
+
+// ⭐ YENİ — log temizlik servisi (Hangfire kendi scope'unda üretecek)
+builder.Services.AddScoped<ETicaretAPI.Services.LogTemizlikServisi>();
 
 
 // ⭐ YENİ — RATE LIMIT (brute-force / çok sık deneme koruması)
@@ -600,6 +639,27 @@ RecurringJob.AddOrUpdate<ETicaretAPI.Services.StokBildirimServisi>(
     "stok-bildirimleri",
     servis => servis.BekleyenleriGonderAsync(),
     "*/1 * * * *");
+
+
+// ⭐ YENİ — LOG TEMİZLİĞİ
+//
+// Yaşı geçen denetim / e-posta / giriş / hata kayıtlarını siler.
+// Süreler appsettings'te (Loglar bölümü), koda gömülü değil.
+//
+// ⚠️ GÜNDE BİR KEZ. Saatlik çalıştırmak aynı işi 24 kez yapmak olurdu:
+// bir gün eskiyen kayıt gece silinince ertesi geceye kadar yeni bir
+// aday oluşmuyor.
+//
+// ⚠️ Saat 03:30 seçildi: alışverişin en durgun olduğu saat ve silme
+// işlemi kilit tutuyor. Tam saat başı yerine 30 dakika kaydırıldı —
+// başka bir zamanlanmış iş eklenirse ikisi aynı anda çakışmasın.
+//
+// ⚠️ SABİT İŞ KİMLİĞİ — AddOrUpdate bunu anahtar olarak kullanıyor.
+// Sabit olmasaydı her açılışta yeni bir tekrarlayan iş eklenirdi.
+RecurringJob.AddOrUpdate<ETicaretAPI.Services.LogTemizlikServisi>(
+    "log-temizligi",
+    servis => servis.EskileriSilAsync(),
+    "30 3 * * *");
 
 
 

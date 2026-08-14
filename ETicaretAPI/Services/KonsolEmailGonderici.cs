@@ -13,14 +13,17 @@
             _log = log;
         }
 
-        public Task GonderAsync(string aliciEmail, string konu, string govdeHtml)
+        public Task<string?> GonderAsync(
+            string aliciEmail, string konu, string govdeHtml, string olayAdi)
         {
             // LogWarning kullandık ki konsolda göze çarpsın (Information'da kaybolmasın).
             _log.LogWarning(
-                "\n===== [DEV EMAIL] =====\nKime: {Alici}\nKonu: {Konu}\n{Govde}\n=======================",
-                aliciEmail, konu, govdeHtml);
+                "\n===== [DEV EMAIL] =====\nOlay: {Olay}\nKime: {Alici}\nKonu: {Konu}\n{Govde}\n=======================",
+                olayAdi, aliciEmail, konu, govdeHtml);
 
-            return Task.CompletedTask; // gerçek gönderim yok, işi bitti say
+            // ⚠️ Mesaj kimliği null: ortada gerçek bir sağlayıcı yok.
+            // Uydurma bir id yazmak, olmayan bir kanıt üretmek olurdu.
+            return Task.FromResult<string?>(null);
         }
     }
 }

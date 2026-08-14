@@ -29,9 +29,39 @@ namespace ETicaretAPI.Controllers
     {
         private readonly AppDbContext _context;
 
-        public AdminCouponsController(AppDbContext context)
+        // ⭐ YENİ — denetim kaydı. Kupon bir İNDİRİM aracı: kimin hangi
+        // koşullarla para bıraktığı kayıt altında olmalı.
+        private readonly ETicaretAPI.Services.DenetimKaydi _denetim;
+
+        public AdminCouponsController(
+            AppDbContext context,
+            ETicaretAPI.Services.DenetimKaydi denetim)
         {
             _context = context;
+            _denetim = denetim;
+        }
+
+
+        // ⭐ YENİ — denetime yazılacak kupon alanlarının BEYAZ LİSTESİ.
+        //
+        // ⚠️ Varlık serialize EDİLMİYOR: Coupon'a yarın eklenecek bir
+        // alan sessizce log'a düşmesin diye alanlar elle sayılıyor.
+        private static Dictionary<string, object?> KuponDenetimAlanlari(Coupon k)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["aciklama"] = k.Description,
+                ["indirimTipi"] = k.DiscountType,
+                ["indirimDegeri"] = k.DiscountValue,
+                ["altLimit"] = k.MinOrderAmount,
+                ["ustSinir"] = k.MaxDiscountAmount,
+                ["baslangic"] = k.StartsAt,
+                ["bitis"] = k.EndsAt,
+                ["kullanimLimiti"] = k.UsageLimit,
+                ["kisiBasiLimit"] = k.UsageLimitPerUser,
+                ["kategoriId"] = k.CategoryId,
+                ["aktif"] = k.IsActive
+            };
         }
 
         // Kuponu kimin oluşturduğunu kaydetmek için.
@@ -389,6 +419,23 @@ namespace ETicaretAPI.Controllers
                 });
             }
 
+            // ⭐ YENİ — DENETİM KAYDI.
+            //
+            // ⚠️ Kupon satırı yazıldıktan SONRA: kupon.Id ancak o zaman
+            // dolu ve etikete giriyor. Ayrı bir SaveChanges gerekiyor —
+            // yukarıdaki try/catch zaten yarış koşulunu yakalamak için
+            // orada duruyor ve denetim kaydını ona sokmak, kod ihlali
+            // mesajını denetim hatasıyla karıştırırdı.
+            await _denetim.EkleAsync(
+                yapanId: GetUserId(),
+                hedefId: GetUserId(),
+                hedefAd: ETicaretAPI.Services.DenetimEtiketi.Kupon(kupon.Id, kupon.Code),
+                islem: ETicaretAPI.Services.DenetimIslemi.KuponOlusturuldu,
+                eski: null,
+                yeni: ETicaretAPI.Services.DenetimDegeri.Yaz(KuponDenetimAlanlari(kupon)));
+
+            await _context.SaveChangesAsync();
+
             return Ok(new
             {
                 mesaj = "Kupon oluşturuldu biladerim!",
@@ -435,6 +482,10 @@ namespace ETicaretAPI.Controllers
             // dediğinde eski siparişlerdeki indirim aynı kalır.
             // Bu, dondurma (snapshot) deseninin bize kazandırdığı özgürlük.
 
+            // ⭐ YENİ — denetim için eski değerlerin kopyası.
+            // ⚠️ Atamalardan ÖNCE alınmalı; sonrasında eski değer yok.
+            var oncekiDegerler = KuponDenetimAlanlari(kupon);
+
             kupon.Description = dto.Description.Trim();
             kupon.DiscountType = dto.DiscountType;
             kupon.DiscountValue = dto.DiscountValue;
@@ -453,6 +504,21 @@ namespace ETicaretAPI.Controllers
 
             // ⚠️ Code, UsedCount, CreatedAt, CreatedByUserId'e DOKUNMUYORUZ.
             // DTO'da zaten yoklar, ama olsalar bile yazmazdık.
+
+            // ⭐ YENİ — DENETİM KAYDI: yalnızca değişen alanlar.
+            var (degisenEski, degisenYeni) = ETicaretAPI.Services.DenetimDegeri.Degisenler(
+                oncekiDegerler, KuponDenetimAlanlari(kupon));
+
+            if (degisenEski.Count > 0)
+            {
+                await _denetim.EkleAsync(
+                    yapanId: GetUserId(),
+                    hedefId: GetUserId(),
+                    hedefAd: ETicaretAPI.Services.DenetimEtiketi.Kupon(kupon.Id, kupon.Code),
+                    islem: ETicaretAPI.Services.DenetimIslemi.KuponGuncellendi,
+                    eski: ETicaretAPI.Services.DenetimDegeri.Yaz(degisenEski),
+                    yeni: ETicaretAPI.Services.DenetimDegeri.Yaz(degisenYeni));
+            }
 
             await _context.SaveChangesAsync();
 
@@ -482,7 +548,22 @@ namespace ETicaretAPI.Controllers
                 return NotFound(new { mesaj = "Kupon bulunamadı!" });
             }
 
+            var oncekiAktif = kupon.IsActive;
             kupon.IsActive = dto.IsActive;
+
+            // ⚠️ Değişiklik yoksa kayıt da yok: aynı durumu tekrar
+            // göndermek (iki sekmede açık panel) defteri kirletmesin.
+            if (oncekiAktif != kupon.IsActive)
+            {
+                await _denetim.EkleAsync(
+                    yapanId: GetUserId(),
+                    hedefId: GetUserId(),
+                    hedefAd: ETicaretAPI.Services.DenetimEtiketi.Kupon(kupon.Id, kupon.Code),
+                    islem: ETicaretAPI.Services.DenetimIslemi.KuponGuncellendi,
+                    eski: ETicaretAPI.Services.DenetimDegeri.Yaz("aktif", oncekiAktif),
+                    yeni: ETicaretAPI.Services.DenetimDegeri.Yaz("aktif", kupon.IsActive));
+            }
+
             await _context.SaveChangesAsync();
 
             return Ok(new
@@ -525,6 +606,18 @@ namespace ETicaretAPI.Controllers
             }
 
             _context.Coupons.Remove(kupon);
+
+            // ⭐ YENİ — DENETİM KAYDI, satır silinmeden önce.
+            // ⚠️ Kuponun koşulları kayda kopyalanıyor: satır gidiyor ve
+            // "neyi sildik" sorusunun geriye tek cevabı bu kayıt kalıyor.
+            await _denetim.EkleAsync(
+                yapanId: GetUserId(),
+                hedefId: GetUserId(),
+                hedefAd: ETicaretAPI.Services.DenetimEtiketi.Kupon(kupon.Id, kupon.Code),
+                islem: ETicaretAPI.Services.DenetimIslemi.KuponSilindi,
+                eski: ETicaretAPI.Services.DenetimDegeri.Yaz(KuponDenetimAlanlari(kupon)),
+                yeni: null);
+
             await _context.SaveChangesAsync();
 
             return Ok(new { mesaj = "Kupon silindi biladerim!" });

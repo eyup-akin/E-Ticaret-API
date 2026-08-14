@@ -550,15 +550,16 @@ namespace ETicaretAPI.Controllers
             // pageSize'a ÜST SINIR şart: 999999 gönderen bir istek
             // tüm tabloyu belleğe çeker — bu bir servis dışı bırakma
             // (DoS) kapısıdır.
-            if (page < 1)
-            {
-                page = 1;
-            }
+            //
+            // ⭐ DEĞİŞTİ — kurallar Support/LogSorgusu'nda.
+            // Sistem Kayıtları ekranının diğer üç sekmesi de aynı
+            // sayfalama ve sayım kurallarını kullanıyor; iki kopya
+            // ayrışırsa aynı ekranın sekmeleri farklı davranırdı.
+            var (sayfaNo, sayfaBoyu) = ETicaretAPI.Support.LogSorgusu
+                .SayfaDuzelt(page, pageSize);
 
-            if (pageSize < 1 || pageSize > 100)
-            {
-                pageSize = 20;
-            }
+            page = sayfaNo;
+            pageSize = sayfaBoyu;
 
             // ⭐ Aşama 2'de yazdığımız RaporTarihi servisini
             // yeniden kullanıyoruz.
@@ -567,7 +568,13 @@ namespace ETicaretAPI.Controllers
             // gece 01:00'da yapılan bir rol değişikliği, UTC'de bir
             // önceki güne düşer. Raporlarda çözdüğümüz problemin
             // aynısı — çözümü de aynı, çünkü tek yerde yaşıyor.
-            var aralik = _tarih.Aralik(baslangic, bitis);
+            //
+            // ⭐ DEĞİŞTİ — tarih seçilmemişse SON 7 GÜN (raporlardaki
+            // 30 gün değil). Denetim tablosu sipariş tablosundan hızlı
+            // büyüyor; 30 gün, sayfanın ilk açılışını en pahalı sorgu
+            // yapardı.
+            var aralik = ETicaretAPI.Support.LogSorgusu
+                .Aralik(_tarih, baslangic, bitis);
 
             // ⚠️ IQueryable: sorgu henüz veritabanına GİTMEDİ.
             // Aşağıda koşullu olarak filtre ekleyeceğiz, hepsi
@@ -606,7 +613,12 @@ namespace ETicaretAPI.Controllers
             // Sayfalamadan sonra alsaydık her zaman en fazla
             // pageSize kadar çıkardı ve "toplam 340 kayıt" bilgisi
             // yanlış olurdu.
-            var toplam = await sorgu.CountAsync();
+            //
+            // ⭐ DEĞİŞTİ — sayım ÜST SINIRLI. Düz CountAsync, tablo
+            // büyüdükçe her sayfa yüklemesinde tam tarama demekti.
+            // Sınır aşılırsa ekran "1000+" gösteriyor.
+            var (toplam, toplamAsildi) = await ETicaretAPI.Support.LogSorgusu
+                .SayAsync(sorgu);
 
             var loglar = await sorgu
                 // En yeni üstte — denetim kaydına bakan kişi
@@ -630,6 +642,12 @@ namespace ETicaretAPI.Controllers
                     islem = l.Action,
                     eski = l.OldValue,
                     yeni = l.NewValue,
+
+                    // ⭐ YENİ — işlemin geldiği adres.
+                    // ⚠️ Eski kayıtlarda null: geriye dönük
+                    // doldurulmadı, uydurulmuş bir IP olmayan bir kanıt
+                    // üretirdi. Ekran boş olanlara "—" yazıyor.
+                    ip = l.IpAdresi,
 
                     tarih = l.CreatedAt
                 })
@@ -662,6 +680,11 @@ namespace ETicaretAPI.Controllers
             {
                 loglar,
                 toplam,
+
+                // ⭐ YENİ — sayım üst sınıra takıldı mı? Ekran "1000+"
+                // yazıyor; 1001 göndermek yanlış bir kesinlik yaratırdı.
+                toplamAsildi,
+
                 sayfa = page,
                 sayfaBoyutu = pageSize,
                 toplamSayfa = (int)Math.Ceiling(toplam / (double)pageSize),

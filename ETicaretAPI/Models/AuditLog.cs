@@ -22,6 +22,15 @@
         public string? OldValue { get; set; }
         public string? NewValue { get; set; }
 
+        // ⭐ YENİ — işlemin geldiği istemci adresi.
+        //
+        // ⚠️ NULLABLE ve öyle kalmalı: Hangfire işlerinin ve sistem
+        // tetiklemelerinin isteği yok. Boş bırakmak "bilinmiyor" der,
+        // 0.0.0.0 yazmak yalan söylerdi. (StockMovement.KullaniciId ile
+        // aynı gerekçe.) Eski kayıtlar da null kalıyor — uydurulmuş bir
+        // IP, olmayan bir kanıt üretir.
+        public string? IpAdresi { get; set; }
+
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }
 }

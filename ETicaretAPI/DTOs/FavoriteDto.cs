@@ -23,5 +23,18 @@
 
         public string? ProductImageUrl { get; set; }    // ⭐ ana resim (yoksa null)
 
+        // ⭐ YENİ — İNDİRİM ÖNCESİ FİYAT.
+        //
+        // ⚠️ Bu alan eksik olduğu için favori listesindeki kartlarda
+        // indirim rozeti HİÇ ÇIKMIYORDU: `UrunKarti` indirimi
+        // `eskiFiyat` üzerinden hesaplıyor ve favori DTO'sunda o alan
+        // yoktu. Aynı bileşen ana sayfada rozet gösterip favorilerde
+        // göstermiyordu — müşteri açısından "indirim kayboldu".
+        //
+        // ⚠️ Yüzde GÖNDERİLMİYOR, iki sayı gönderiliyor. Oranı istemci
+        // türetiyor (utils/indirim.js) — ProductDto'daki kararın aynısı.
+        // Aynı gerçeği iki alanda saklamak, fiyat değişince yüzdenin
+        // bayatlaması demekti.
+        public decimal? EskiFiyat { get; set; }
     }
 }

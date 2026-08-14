@@ -708,6 +708,16 @@ namespace ETicaretAPI.Data
                 .Property(u => u.SifreSifirlamaTokenHash)
                 .HasMaxLength(64);
 
+            // ⭐ YENİ — profil fotoğrafı yolu.
+            //
+            // ⚠️ Sınır verilmezse EF nvarchar(max) üretiyor: sayfa dışı
+            // saklanan, indekslenemeyen bir sütun. Tuttuğu şey
+            // "/uploads/profil/<32 hex>.jpg" — 60 karakteri bile
+            // geçmiyor. Kampanya görseliyle aynı sınır (300).
+            modelBuilder.Entity<User>()
+                .Property(u => u.ProfilFotoUrl)
+                .HasMaxLength(300);
+
             // ⭐ YENİ — E-POSTA BENZERSİZLİĞİ
             //
             // İKİ AYRI AYAR, İKİSİ DE ZORUNLU:

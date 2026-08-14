@@ -44,6 +44,20 @@
 
         // ⭐ YENİ — ŞİFRE SIFIRLAMA
         // Aynı mantık: ham token maille gider, DB'de yalnızca HASH durur.
+        // ⭐ YENİ — PROFİL FOTOĞRAFI
+        //
+        // "/uploads/profil/a3f9c1.jpg" — yoksa null.
+        //
+        // ⚠️ NULL = FOTOĞRAF YOK, boş metin değil. Ekran null görünce
+        // baş harfli daireyi çiziyor; boş metin olsaydı "src=''" ile
+        // kırık bir görsel denenirdi.
+        //
+        // ⚠️ HESAP KAPATILINCA TEMİZLENİYOR (HesabimiSil). Ad ve
+        // e-posta maskeleniyor ama fotoğraf diskte kalsaydı, kimliği
+        // silinmiş bir kaydın yüzü sunucuda durmaya devam ederdi —
+        // maskelemenin amacını boşa çıkarırdı.
+        public string? ProfilFotoUrl { get; set; }
+
         public string? SifreSifirlamaTokenHash { get; set; }
 
         // Sıfırlama linki ne zamana kadar geçerli (1 saat vereceğiz —

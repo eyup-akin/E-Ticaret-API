@@ -439,7 +439,8 @@ namespace ETicaretAPI.Controllers
             string? kategoriler,
             double? minPuan,
             bool sadeceStokta,
-            string? idler = null)
+            string? idler = null,
+            bool sadeceIndirimli = false)   // ⭐ YENİ
         {
             var query = _context.Products.AsQueryable();
 
@@ -588,6 +589,25 @@ namespace ETicaretAPI.Controllers
                 query = query.Where(p => p.Stock > 0);
             }
 
+            // ⭐ YENİ — SADECE İNDİRİMDEKİLER
+            //
+            // ⚠️ "İndirimli" diye bir BAYRAK YOK, olmayacak da. İndirim
+            // EskiFiyat ile Price arasındaki ilişkiden türüyor ve bu
+            // kuralın tek doğru kaynağı o karşılaştırma. Ayrı bir
+            // `IndirimliMi` sütunu açsaydık fiyat değiştiğinde bayrağı
+            // güncellemeyi unutan her yol, "indirimli" yazan ama
+            // indirimi olmayan ürün üretirdi.
+            //
+            // ⚠️ Koşul, mobildeki `utils/indirim.js` ve panelin gösterdiği
+            // kuralla BİREBİR aynı: eski fiyat DOLU ve güncel fiyattan
+            // BÜYÜK. Yalnızca null kontrolü yapsaydık, yanlışlıkla düşük
+            // girilmiş bir eski fiyat ürünü bu listeye sokar ama ekranda
+            // rozet çıkmazdı — filtre ile görünen ayrışırdı.
+            if (sadeceIndirimli)
+            {
+                query = query.Where(p => p.EskiFiyat != null && p.EskiFiyat > p.Price);
+            }
+
             // ⭐ YENİ (6.1) — EN AZ ŞU KADAR PUAN
             //
             // ⚠️ GİZLİ YORUMLAR ORTALAMAYA GİRMİYOR (IsHidden == false).
@@ -633,7 +653,8 @@ namespace ETicaretAPI.Controllers
             [FromQuery] double? minPuan = null,       // ⭐ YENİ (6.1)
             [FromQuery] bool sadeceStokta = false,    // ⭐ YENİ (6.1)
             [FromQuery] string? siralama = null,      // ⭐ YENİ (6.1)
-            [FromQuery] string? idler = null)         // ⭐ YENİ (GV/Faz 4)
+            [FromQuery] string? idler = null,         // ⭐ YENİ (GV/Faz 4)
+            [FromQuery] bool sadeceIndirimli = false) // ⭐ YENİ — İndirimler sayfası
         {
             // Rolü bir kez okuyup değişkene alıyoruz. Aşağıda iki ayrı yerde
             // lazım olacak; her seferinde token'daki claim listesini taramanın
@@ -642,7 +663,8 @@ namespace ETicaretAPI.Controllers
 
             var query = UrunSorgusuKur(
                 adminMi, categoryId, search, aktif, arsiv,
-                minFiyat, maxFiyat, kategoriler, minPuan, sadeceStokta, idler);
+                minFiyat, maxFiyat, kategoriler, minPuan, sadeceStokta, idler,
+                sadeceIndirimli);
 
             query = SiralamayiUygula(query, siralama);
 

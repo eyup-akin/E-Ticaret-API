@@ -66,13 +66,19 @@ namespace ETicaretAPI.Controllers
         // yazılmıyordu. Yakalayan, log'lamaktan da sorumludur.
         private readonly ILogger<AuthController> _log;
 
+        // ⭐ YENİ — profil fotoğrafı wwwroot'a yazılıyor; klasörün
+        // diskteki yerini bu biliyor. (ProductsController ve
+        // AdminKampanyalarController ile aynı gerekçe.)
+        private readonly IWebHostEnvironment _env;
+
         public AuthController(
             AppDbContext context,
             ETicaretAPI.Services.TokenService tokenService,
             ETicaretAPI.Services.IEmailGonderici email,   // ⭐ YENİ
             IConfiguration config,                        // ⭐ YENİ
             ETicaretAPI.Services.SozlesmeOnayServisi onayServisi,   // ⭐ YENİ (Aşama 10)
-            ILogger<AuthController> log)                  // ⭐ YENİ
+            ILogger<AuthController> log,                  // ⭐ YENİ
+            IWebHostEnvironment env)                      // ⭐ YENİ
         {
             _context = context;
             _tokenService = tokenService;
@@ -80,6 +86,7 @@ namespace ETicaretAPI.Controllers
             _config = config;   // ⭐ YENİ
             _onayServisi = onayServisi;
             _log = log;         // ⭐ YENİ
+            _env = env;         // ⭐ YENİ
         }
 
         // POST /api/auth/register
@@ -486,7 +493,13 @@ namespace ETicaretAPI.Controllers
                 refreshToken = refreshToken,
                 id = kullanici.Id,
                 fullName = kullanici.FullName,
-                role = kullanici.Role
+                role = kullanici.Role,
+
+                // ⭐ YENİ — girişte de dönüyor ki uygulama açılır
+                // açılmaz avatar doğru çizilsin. Yalnızca profil
+                // ucundan dönseydi, giriş yapan müşteri fotoğrafını
+                // ancak Hesabım'a girip çıktıktan sonra görürdü.
+                profilFotoUrl = kullanici.ProfilFotoUrl
             });
         }
 
@@ -569,7 +582,8 @@ namespace ETicaretAPI.Controllers
                     fullName = u.FullName,
                     email = u.Email,
                     role = u.Role,
-                    createdAt = u.CreatedAt
+                    createdAt = u.CreatedAt,
+                    profilFotoUrl = u.ProfilFotoUrl   // ⭐ YENİ
                 })
                 .FirstOrDefaultAsync();
 
@@ -771,8 +785,87 @@ namespace ETicaretAPI.Controllers
                 id = kullanici.Id,
                 fullName = kullanici.FullName,
                 email = kullanici.Email,
-                role = kullanici.Role
+                role = kullanici.Role,
+                profilFotoUrl = kullanici.ProfilFotoUrl   // ⭐ YENİ
             });
+        }
+
+
+        // ⭐ YENİ — POST /api/auth/profil-foto   (multipart, alan adı: dosya)
+        //
+        // ⚠️ AYRI UÇ, profil güncellemeye eklenmedi. Ad değiştirme JSON,
+        // fotoğraf ise multipart; ikisini tek uca sıkıştırmak, ad
+        // değiştirmek isteyenin her seferinde form-data kurmasını
+        // gerektirirdi.
+        [Microsoft.AspNetCore.Authorization.Authorize]
+        [HttpPost("profil-foto")]
+        public async Task<IActionResult> ProfilFotoYukle([FromForm] IFormFile dosya)
+        {
+            var userId = int.Parse(
+                User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);
+
+            var kullanici = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
+
+            if (kullanici == null || !kullanici.IsActive)
+            {
+                return Unauthorized(new { mesaj = "Oturum geçersiz. Lütfen tekrar giriş yap." });
+            }
+
+            // ⚠️ Doğrulama ürün ve banner yüklemeyle AYNI serviste:
+            // boyut, uzantı, MIME ve byte kontrolü. Buraya ayrı bir
+            // kural yazsaydık, birinde kapatılan bir açık burada
+            // açık kalırdı.
+            var hata = await ResimDosyasi.DogrulaAsync(dosya);
+
+            if (hata != null)
+            {
+                return BadRequest(new { mesaj = hata });
+            }
+
+            var eski = kullanici.ProfilFotoUrl;
+
+            kullanici.ProfilFotoUrl = await ResimDosyasi.DiskeYazAsync(_env, dosya, "profil");
+            await _context.SaveChangesAsync();
+
+            // ⚠️ Eski dosya kayıt yazıldıktan SONRA siliniyor. Ters
+            // sırada olsaydı SaveChanges patladığında kayıt eski
+            // adresi gösterirken dosya diskte olmazdı.
+            ResimDosyasi.DiskDosyasiniSil(_env, eski);
+
+            return Ok(new
+            {
+                mesaj = "Profil fotoğrafın güncellendi.",
+                profilFotoUrl = kullanici.ProfilFotoUrl
+            });
+        }
+
+
+        // ⭐ YENİ — DELETE /api/auth/profil-foto
+        [Microsoft.AspNetCore.Authorization.Authorize]
+        [HttpDelete("profil-foto")]
+        public async Task<IActionResult> ProfilFotoSil()
+        {
+            var userId = int.Parse(
+                User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);
+
+            var kullanici = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
+
+            if (kullanici == null || !kullanici.IsActive)
+            {
+                return Unauthorized(new { mesaj = "Oturum geçersiz. Lütfen tekrar giriş yap." });
+            }
+
+            var eski = kullanici.ProfilFotoUrl;
+
+            kullanici.ProfilFotoUrl = null;
+            await _context.SaveChangesAsync();
+
+            ResimDosyasi.DiskDosyasiniSil(_env, eski);
+
+            // ⚠️ Fotoğrafı zaten olmayan kullanıcıda da 200: istenen
+            // son durum sağlanmış. 400 dönmek, iki kez basan
+            // müşteriye olmayan bir hata göstermek olurdu.
+            return Ok(new { mesaj = "Profil fotoğrafın kaldırıldı." });
         }
 
 
@@ -928,6 +1021,16 @@ namespace ETicaretAPI.Controllers
                 // yanlışlıkla mail gönderilse bile hiçbir yere ulaşmaz.
                 kullanici.Email = $"silinmis_{userId}@silinmis.local";
 
+                // ⭐ YENİ — PROFİL FOTOĞRAFI DA GİDİYOR.
+                //
+                // ⚠️ Ad ve e-postayı maskeleyip fotoğrafı bırakmak,
+                // maskelemenin amacını boşa çıkarırdı: kimliği
+                // silinmiş bir kaydın YÜZÜ sunucuda durmaya devam
+                // ederdi. Dosya aşağıda, transaction commit olduktan
+                // sonra diskten de siliniyor.
+                var silinecekFoto = kullanici.ProfilFotoUrl;
+                kullanici.ProfilFotoUrl = null;
+
                 // Şifreyi rastgele bir değerle değiştiriyoruz.
                 //
                 // Neden boş bırakmıyoruz? BCrypt.Verify boş hash ile
@@ -964,6 +1067,12 @@ namespace ETicaretAPI.Controllers
 
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
+
+                // ⚠️ Dosya COMMIT'TEN SONRA siliniyor. Önce silseydik ve
+                // transaction geri alınsaydı, hesabı duran bir
+                // kullanıcının fotoğrafı yok olurdu — geri alınamayan
+                // bir yan etki.
+                ResimDosyasi.DiskDosyasiniSil(_env, silinecekFoto);
             }
             catch (Exception ex)
             {

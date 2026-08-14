@@ -62,6 +62,10 @@ namespace ETicaretAPI.Controllers
                           ProductId = p.Id,
                           ProductName = p.Name,
                           ProductPrice = p.Price,
+
+                          // ⭐ YENİ — indirim rozeti favorilerde de çıksın.
+                          // Gerekçe FavoriteDto'da.
+                          EskiFiyat = p.EskiFiyat,
                           // ⭐ DEĞİŞTİ — ham stok yerine türetilmiş durum.
                           //
                           // ⚠️ Hesap SQL'de yapılıyor (bellekte değil):

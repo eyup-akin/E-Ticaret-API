@@ -1272,7 +1272,18 @@ namespace ETicaretAPI.Controllers
 
                             ProductName = oi.ProductName,   // ⭐ donmuş ad
                             Quantity = oi.Quantity,
-                            UnitPrice = oi.UnitPrice
+                            UnitPrice = oi.UnitPrice,
+
+                            // ⭐ YENİ — ürünün GÜNCEL ana resmi.
+                            // ⚠️ Donmuyor; gerekçe OrderItemDto'da.
+                            // ⚠️ Alt sorgu EF tarafından tek SQL'e
+                            // çevriliyor (LEFT JOIN), N+1 doğmuyor.
+                            ProductImageUrl = _context.ProductImages
+                                .Where(r => r.ProductId == oi.ProductId)
+                                .OrderByDescending(r => r.IsMain)
+                                .ThenBy(r => r.SortOrder)
+                                .Select(r => r.Url)
+                                .FirstOrDefault()
                         })
                         .ToList()
                 })
@@ -1304,6 +1315,31 @@ namespace ETicaretAPI.Controllers
                 .Where(oi => oi.OrderId == id)
                 .ToListAsync();
 
+            /* ⭐ YENİ — kalemlerin ürün resimleri.
+             *
+             * ⚠️ TEK SORGU, kalem başına bir tane DEĞİL. Projeksiyon
+             * burada bellekte yapıldığı için alt sorgu yazamıyoruz
+             * (liste ucundan farkı bu); resimleri önce toplu çekip
+             * sözlüğe koyuyoruz. Kalem başına sorsaydık 20 kalemlik
+             * bir siparişte 20 gidiş-dönüş olurdu.
+             *
+             * ⚠️ Ana resim önce: `IsMain` azalan, sonra yükleme
+             * sırası — ürün listesindeki `ResimleriDoldur` ile aynı
+             * sıralama. Farklı olsaydı aynı ürün iki ekranda iki
+             * farklı fotoğrafla görünürdü. */
+            var urunIdleri = kalemler.Select(k => k.ProductId).Distinct().ToList();
+
+            var resimler = await _context.ProductImages
+                .Where(r => urunIdleri.Contains(r.ProductId))
+                .OrderByDescending(r => r.IsMain)
+                .ThenBy(r => r.SortOrder)
+                .Select(r => new { r.ProductId, r.Url })
+                .ToListAsync();
+
+            var anaResim = resimler
+                .GroupBy(r => r.ProductId)
+                .ToDictionary(g => g.Key, g => g.First().Url);
+
             var items = kalemler
                 .Select(oi => new OrderItemDto
                 {
@@ -1312,7 +1348,11 @@ namespace ETicaretAPI.Controllers
                     Quantity = oi.Quantity,
                     UnitPrice = oi.UnitPrice,
                     VatRate = oi.VatRate,         // ⭐ YENİ
-                    EskiFiyat = oi.EskiFiyat      // ⭐ YENİ (B1)
+                    EskiFiyat = oi.EskiFiyat,     // ⭐ YENİ (B1)
+
+                    // ⚠️ Ürün silinmişse sözlükte yok → null kalıyor
+                    // ve ekran baş harfli karoyu çiziyor.
+                    ProductImageUrl = anaResim.GetValueOrDefault(oi.ProductId)
                 })
                 .ToList();
 

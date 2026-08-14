@@ -129,5 +129,24 @@ namespace ETicaretAPI.DTOs
         // fiyat. Eski siparişlerde null ve orada kazanç satırı hiç
         // çizilmiyor.
         public decimal? EskiFiyat { get; set; }
+
+        // ⭐ YENİ — ürünün ANA RESMİ.
+        //
+        // ⚠️⚠️ BU ALAN DONDURULMUYOR — bilerek, kalemdeki diğer
+        // alanların tersine.
+        //
+        // Ad, fiyat ve KDV oranı siparişin içine kopyalanıyor çünkü
+        // onlar "o gün ne satıldı, ne kadara" sorusunun cevabı ve
+        // sonradan değişmemeli. Resim ise "hangi ürün bu" sorusunun
+        // cevabı: ürünün fotoğrafı güncellendiğinde müşterinin
+        // geçmiş siparişinde eski fotoğrafı görmesi için bir sebep
+        // yok — aynı ürün.
+        //
+        // (Aynı ayrım yol haritasında yazılı: sipariş adresi donar,
+        //  yorumcu adı donmaz.)
+        //
+        // ⚠️ Ürün silinmişse null kalıyor ve ekran baş harfli karoyu
+        // çiziyor. Kırık bir resim yerine bilinçli bir yedek.
+        public string? ProductImageUrl { get; set; }
     }
 }

@@ -61,6 +61,9 @@ namespace ETicaretAPI.Data
         // ⭐ YENİ — müşterinin kaydettiği siparişler ("hızlı siparişler")
         public DbSet<HizliSiparis> HizliSiparisler { get; set; }
 
+        // ⭐ YENİ (B2) — ana sayfa afişleri / kampanyalar
+        public DbSet<Kampanya> Kampanyalar { get; set; }
+
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -450,6 +453,24 @@ namespace ETicaretAPI.Data
                  .WithMany()
                  .HasForeignKey(ku => ku.ProductId)
                  .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            // ⭐ YENİ (B2) — KAMPANYALAR
+            modelBuilder.Entity<Kampanya>(e =>
+            {
+                e.Property(k => k.Baslik).HasMaxLength(100).IsRequired();
+                e.Property(k => k.KisaAciklama).HasMaxLength(200).IsRequired();
+                e.Property(k => k.BitisMetni).HasMaxLength(100).IsRequired();
+                e.Property(k => k.Aciklama).HasMaxLength(2000).IsRequired();
+                e.Property(k => k.GorselUrl).HasMaxLength(300).IsRequired();
+
+                e.Property(k => k.KuponKodlari).HasMaxLength(500).IsRequired();
+                e.Property(k => k.Kosullar).HasMaxLength(2000).IsRequired();
+
+                // Müşteri ucunun tek sorgusu bu: yayındakiler, sıraya
+                // göre. Kampanya sayısı bir elin parmağı kadar olacak
+                // ama indeks sıralamayı da karşıladığı için bedava.
+                e.HasIndex(k => new { k.AktifMi, k.Sira });
             });
 
             // ⭐ YENİ — HIZLI SİPARİŞLER

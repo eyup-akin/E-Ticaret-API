@@ -54,10 +54,15 @@ namespace ETicaretAPI.Controllers
         // olsaydı değiştirmek için sorguyu okumak gerekirdi.
         private const int PopulerGunSayisi = 30;
 
-        // Resim yükleme kuralları — tek yerde dursun
-        private const long MaxDosyaBoyutu = 5 * 1024 * 1024; // 5 MB
-        private static readonly string[] IzinliUzantilar = { ".jpg", ".jpeg", ".png", ".webp" };
-        private static readonly string[] IzinliTipler = { "image/jpeg", "image/png", "image/webp" };
+        // ⭐ DEĞİŞTİ — resim kuralları artık ResimDosyasi servisinde.
+        //
+        // Banner yükleme ikinci tüketici olunca sınır, uzantı listesi ve
+        // "byte'lara bak" kontrolü buradan ortak servise taşındı. Burada
+        // kalan yalnızca eski adlara giden birer takma ad; çağrı yerleri
+        // (bu dosyada 6 yer) değişmesin diye duruyorlar.
+        private const long MaxDosyaBoyutu = ResimDosyasi.MaxBoyut;
+        private static readonly string[] IzinliUzantilar = ResimDosyasi.IzinliUzantilar;
+        private static readonly string[] IzinliTipler = ResimDosyasi.IzinliTipler;
 
         public ProductsController(
             AppDbContext context,
@@ -343,80 +348,13 @@ namespace ETicaretAPI.Controllers
             }
         }
 
-        // GERÇEK KONTROL: dosyanın İÇİNE bak.
-        // Uzantı ve ContentType istemciden gelir → yalan olabilir.
-        // İlk byte'lar dosyanın kendisindedir → yalan söylenemez.
-        private static async Task<bool> GercektenResimMi(IFormFile dosya)
-        {
-            using var akis = dosya.OpenReadStream();
+        // ⭐ DEĞİŞTİ — ikisi de ResimDosyasi'na taşındı, burada takma ad.
+        // Gerekçe yukarıda, kuralların tanımlandığı yerde.
+        private static Task<bool> GercektenResimMi(IFormFile dosya)
+            => ResimDosyasi.GercektenResimMi(dosya);
 
-            var baslik = new byte[12];
-            var okunan = await akis.ReadAsync(baslik, 0, 12);
-
-            if (okunan < 12)
-            {
-                return false; // 12 byte bile yoksa resim değildir
-            }
-
-            // JPEG:  FF D8 FF
-            if (baslik[0] == 0xFF && baslik[1] == 0xD8 && baslik[2] == 0xFF)
-            {
-                return true;
-            }
-
-            // PNG:  89 50 4E 47 0D 0A 1A 0A
-            if (baslik[0] == 0x89 && baslik[1] == 0x50 &&
-                baslik[2] == 0x4E && baslik[3] == 0x47)
-            {
-                return true;
-            }
-
-            // WEBP:  "RIFF" ....  "WEBP"
-            if (baslik[0] == 0x52 && baslik[1] == 0x49 &&
-                baslik[2] == 0x46 && baslik[3] == 0x46 &&
-                baslik[8] == 0x57 && baslik[9] == 0x45 &&
-                baslik[10] == 0x42 && baslik[11] == 0x50)
-            {
-                return true;
-            }
-
-          
-            
-            return false;
-        }
-
-
-
-        // URL'den gelen ham byte'lar için: gerçek resim mi kontrolü + doğru uzantı.
-        // Resim değilse null döner. (Uzantıyı URL'den değil, içerikten belirliyoruz.)
         private static string? ResimUzantisiBul(byte[] veri)
-        {
-            if (veri.Length < 12)
-            {
-                return null;
-            }
-
-            // JPEG: FF D8 FF
-            if (veri[0] == 0xFF && veri[1] == 0xD8 && veri[2] == 0xFF)
-            {
-                return ".jpg";
-            }
-
-            // PNG: 89 50 4E 47
-            if (veri[0] == 0x89 && veri[1] == 0x50 && veri[2] == 0x4E && veri[3] == 0x47)
-            {
-                return ".png";
-            }
-
-            // WEBP: "RIFF" .... "WEBP"
-            if (veri[0] == 0x52 && veri[1] == 0x49 && veri[2] == 0x46 && veri[3] == 0x46 &&
-                veri[8] == 0x57 && veri[9] == 0x45 && veri[10] == 0x42 && veri[11] == 0x50)
-            {
-                return ".webp";
-            }
-
-            return null;
-        }
+            => ResimDosyasi.UzantiBul(veri);
 
 
 

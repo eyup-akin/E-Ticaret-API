@@ -70,10 +70,19 @@ namespace ETicaretAPI.Controllers
         //  filtre SQL'e gömülüyor — tüm siparişleri belleğe çekip
         //  elemiyoruz.
         // ============================================================
+        //  ⭐ DEĞİŞTİ — ÖDENMEMİŞ SİPARİŞLER DE DIŞLANIYOR.
+        //
+        //  ⚠️ Ödeme artık siparişten sonra alınıyor, yani veritabanında
+        //  hiç ödenmemiş siparişler duruyor. Yalnızca "iptal değilse"
+        //  filtresi bunları ciroya yazardı — henüz parası gelmemiş,
+        //  belki hiç gelmeyecek siparişler.
+        //
+        //  "Yanlış sayı, eksik sayıdan tehlikelidir."
         private IQueryable<Models.Order> GecerliSiparisler(RaporAraligi aralik)
         {
             return _context.Orders
                 .Where(o => o.Status != SiparisDurumlari.Iptal
+                         && !OdemeDurumlari.OdenmemisSayilanlar.Contains(o.PaymentStatus)
                          && o.CreatedAt >= aralik.BaslangicUtc
                          && o.CreatedAt < aralik.BitisUtcHaric);
         }

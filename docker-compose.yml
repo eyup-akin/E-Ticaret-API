@@ -224,6 +224,19 @@ services:
       # Geliştirmede doldur, canlıda BOŞ bırak.
       Email__TumunuSuAdreseYonlendir: ${EMAIL_YONLENDIR:-}
 
+      # ⭐ YENİ — ÖDEME (iyzico Checkout Form)
+      #
+      # ⚠️ Bu dört satır olmadan konteynerde ödeme sağlayıcısı
+      # "simulasyon"a düşer — yani ekranda ödeme alınmış görünür ama
+      # iyzico'ya hiç çıkılmaz. Brevo'daki "konsol" tuzağının aynısı.
+      #
+      # ⚠️ "iyzico" seçilip anahtarlar boş bırakılırsa API AÇILMAZ
+      # (Program.cs fail fast).
+      Odeme__Saglayici: ${ODEME_SAGLAYICI:-simulasyon}
+      Odeme__Iyzico__ApiAnahtari: ${IYZICO_API_ANAHTARI:-}
+      Odeme__Iyzico__GizliAnahtar: ${IYZICO_GIZLI_ANAHTAR:-}
+      Odeme__Iyzico__TabanUrl: ${IYZICO_TABAN_URL:-https://sandbox-api.iyzipay.com}
+
       # X-Forwarded-For'a hangi ağlardan güvenilecek — yani Caddy'nin ağı.
       #
       # ⚠️ Bu değer olmadan Adım 3'ün hiçbir anlamı yok: API başlığı

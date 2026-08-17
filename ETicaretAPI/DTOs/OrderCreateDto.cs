@@ -8,8 +8,9 @@ namespace ETicaretAPI.DTOs
         [Range(1, int.MaxValue, ErrorMessage = "Geçerli bir adres seçilmeli!")]
         public int AddressId { get; set; }
 
-        [Range(1, int.MaxValue, ErrorMessage = "Geçerli bir kart seçilmeli!")]
-        public int CardId { get; set; }
+        // ⛔ CardId KALDIRILDI. Kartı iyzico'nun ödeme sayfası topluyor;
+        // sipariş anında hangi kartla ödeneceği bilinmiyor. Alanı
+        // bırakmak "kart seçildi" yanılgısı üretirdi.
 
         // Kupon kodu — isteğe bağlı. Boş/null = kupon kullanılmıyor.
         //

@@ -29,6 +29,10 @@ namespace ETicaretAPI.Services
     // sözlüğünde; orası bir iş kuralı, burası bir sözlük.
     public static class SiparisDurumlari
     {
+        // ⭐ YENİ — ödeme onayı beklenen sipariş. Stok rezerve ama iş
+        // başlamadı; "hazirlaniyor" demek yanlış olurdu.
+        public const string OdemeBekliyor = "odeme_bekliyor";
+
         public const string Hazirlaniyor = "hazirlaniyor";
         public const string Kargoda = "kargoda";
         public const string TeslimEdildi = "teslim_edildi";

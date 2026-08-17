@@ -502,6 +502,64 @@ builder.Services.AddRateLimiter(options =>
 builder.Services.AddScoped<KuponServisi>();
 
 
+// ⭐ YENİ — ÖDEME SAĞLAYICISI
+//
+// Email'deki desenin aynısı: seçim açık bir ayar, eksik yapılandırma
+// sessizce yanlış çalışmıyor, patlıyor.
+builder.Services.AddSingleton<ETicaretAPI.Services.OdemeAyarlari>();
+
+// Saf hesap, durumu yok — SepetHesaplayici ile aynı ömür.
+builder.Services.AddSingleton<ETicaretAPI.Services.IyzicoSepetiKurucu>();
+
+// DbContext'e bağlı üç servis — Scoped.
+builder.Services.AddScoped<ETicaretAPI.Services.OdemeSonucIsleyici>();
+builder.Services.AddScoped<ETicaretAPI.Services.OdenmemisSiparisTemizleyici>();
+builder.Services.AddScoped<ETicaretAPI.Services.OdemeSuresiServisi>();
+builder.Services.AddScoped<ETicaretAPI.Services.IadeGonderici>();
+
+var odemeSaglayici = (builder.Configuration["Odeme:Saglayici"] ?? "simulasyon")
+    .Trim().ToLowerInvariant();
+
+if (odemeSaglayici == "iyzico")
+{
+    // ⚠️ ANAHTAR YOKSA API AÇILMIYOR. Sessizce simülasyona düşseydi
+    // ekranda "ödeme alındı" yazar ama iyzico'ya hiç çıkılmazdı.
+    if (string.IsNullOrWhiteSpace(builder.Configuration["Odeme:Iyzico:ApiAnahtari"]) ||
+        string.IsNullOrWhiteSpace(builder.Configuration["Odeme:Iyzico:GizliAnahtar"]))
+    {
+        throw new InvalidOperationException(
+            "Odeme:Saglayici 'iyzico' ama API/gizli anahtar boş. " +
+            "Geliştirmede appsettings.Development.json'a, Docker'da .env " +
+            "dosyasına ekle (Odeme__Iyzico__ApiAnahtari). Simülasyona " +
+            "dönmek istiyorsan Odeme:Saglayici'yi 'simulasyon' yap.");
+    }
+
+    // ⚠️ CANLI ANAHTAR KORUMASI. Canlı anahtar "sandbox-" ile
+    // başlamıyor; geliştirme makinesine düşmesi gerçek para demek.
+    var apiAnahtari = builder.Configuration["Odeme:Iyzico:ApiAnahtari"]!;
+    var tabanUrl = builder.Configuration["Odeme:Iyzico:TabanUrl"] ?? "";
+
+    if (!apiAnahtari.StartsWith("sandbox-", StringComparison.OrdinalIgnoreCase)
+        && tabanUrl.Contains("sandbox", StringComparison.OrdinalIgnoreCase))
+    {
+        throw new InvalidOperationException(
+            "Odeme:Iyzico:ApiAnahtari 'sandbox-' ile başlamıyor ama " +
+            "TabanUrl sandbox'ı gösteriyor. Anahtar ve ortam uyuşmuyor.");
+    }
+
+    builder.Services.AddScoped<ETicaretAPI.Services.IOdemeSaglayici,
+                               ETicaretAPI.Services.IyzicoSaglayici>();
+}
+else
+{
+    // ⚠️ Singleton: sahte denemeleri BELLEKTE tutuyor. Scoped olsaydı
+    // ödeme sayfası ile callback arasında durum kaybolurdu.
+    builder.Services.AddSingleton<ETicaretAPI.Services.SimulasyonSaglayici>();
+    builder.Services.AddSingleton<ETicaretAPI.Services.IOdemeSaglayici>(sp =>
+        sp.GetRequiredService<ETicaretAPI.Services.SimulasyonSaglayici>());
+}
+
+
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
@@ -660,6 +718,21 @@ RecurringJob.AddOrUpdate<ETicaretAPI.Services.LogTemizlikServisi>(
     "log-temizligi",
     servis => servis.EskileriSilAsync(),
     "30 3 * * *");
+
+
+// ⭐ YENİ — ÖDEME SÜRE AŞIMI
+//
+// Ödenmemiş siparişler stoğu rezerve tutuyor. Bu iş süresi geçenleri
+// iptal edip stoğu, kuponu ve kupon kullanım kaydını geri veriyor.
+//
+// ⚠️ 5 dakikada bir: bekleme süresi 30 dakika olduğu için daha sık
+// taramanın kazancı yok, daha seyrek tarama stoğu gereksiz bekletir.
+//
+// ⚠️ Sabit iş kimliği — AddOrUpdate bunu anahtar olarak kullanıyor.
+RecurringJob.AddOrUpdate<ETicaretAPI.Services.OdemeSuresiServisi>(
+    "odeme-suresi",
+    servis => servis.SuresiGecenleriIptalEtAsync(),
+    "*/5 * * * *");
 
 
 

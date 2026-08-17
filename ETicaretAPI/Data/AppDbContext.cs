@@ -70,6 +70,12 @@ namespace ETicaretAPI.Data
         public DbSet<GirisKaydi> GirisKayitlari { get; set; }
         public DbSet<HataKaydi> HataKayitlari { get; set; }
 
+        // ⭐ YENİ — ÖDEME (iyzico). OdemeIslemleri denemeleri, Payments
+        // ise para hareketlerini tutuyor; ikisi karıştırılmamalı.
+        public DbSet<OdemeIslemi> OdemeIslemleri { get; set; }
+        public DbSet<OdemeKalemi> OdemeKalemleri { get; set; }
+        public DbSet<IyzicoBildirimi> IyzicoBildirimleri { get; set; }
+
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -1061,6 +1067,93 @@ namespace ETicaretAPI.Data
                 // hata kaydını yazma denemesi de patlardı — hata
                 // döngüsünün ta kendisi.
             });
+
+
+            // ============================================================
+            //  ⭐ YENİ — ÖDEME (iyzico)
+            // ============================================================
+
+            modelBuilder.Entity<OdemeIslemi>(e =>
+            {
+                // ⚠️ Benzersizlik doğruluk için: aynı ConversationId ile
+                // ikinci deneme açılırsa iyzico cevabı hangi denemeye ait
+                // olduğu belirsizleşir.
+                e.HasIndex(x => x.ConversationId).IsUnique();
+
+                // Callback ve webhook siparişi token'dan buluyor.
+                e.HasIndex(x => x.Token);
+
+                // "Bu siparişin denemeleri" — admin ödeme detayı.
+                e.HasIndex(x => new { x.OrderId, x.OlusturmaZamani });
+
+                // Süre aşımı işi bu ikiliyle tarıyor.
+                e.HasIndex(x => new { x.Durum, x.OlusturmaZamani });
+
+                e.Property(x => x.ConversationId).HasMaxLength(64).IsRequired();
+                e.Property(x => x.Token).HasMaxLength(128).IsRequired();
+                e.Property(x => x.Durum).HasMaxLength(20).IsRequired();
+                e.Property(x => x.IyzicoPaymentId).HasMaxLength(64);
+                e.Property(x => x.ParaBirimi).HasMaxLength(3).IsRequired();
+                e.Property(x => x.HataKodu).HasMaxLength(40);
+                e.Property(x => x.HataMesaji).HasMaxLength(500);
+                e.Property(x => x.KartTipi).HasMaxLength(40);
+                e.Property(x => x.KartAilesi).HasMaxLength(40);
+                e.Property(x => x.BinNumarasi).HasMaxLength(8);
+                e.Property(x => x.Son4Hane).HasMaxLength(4);
+
+                e.Property(x => x.Price).HasPrecision(18, 2);
+                e.Property(x => x.PaidPrice).HasPrecision(18, 2);
+
+                // ⚠️ HamCevap sınırsız: kırpmak teşhis için gereken tek
+                // kaydı bozar (HataKaydi.YiginIzi ile aynı gerekçe).
+            });
+
+            modelBuilder.Entity<OdemeKalemi>(e =>
+            {
+                e.HasIndex(x => x.OdemeIslemiId);
+
+                // İade akışı kalemi OrderItemId ile arıyor.
+                e.HasIndex(x => x.OrderItemId);
+
+                e.Property(x => x.IyzicoPaymentTransactionId)
+                 .HasMaxLength(64).IsRequired();
+
+                e.Property(x => x.Price).HasPrecision(18, 2);
+                e.Property(x => x.PaidPrice).HasPrecision(18, 2);
+                e.Property(x => x.IadeEdilenTutar).HasPrecision(18, 2);
+            });
+
+            modelBuilder.Entity<IyzicoBildirimi>(e =>
+            {
+                // ⚠️ ASIL KORUMA. Webhook 3 kez denendiği için aynı
+                // bildirim tekrar gelir; ikincisini veritabanı reddediyor.
+                e.HasIndex(x => x.IyziReferenceCode).IsUnique();
+
+                e.HasIndex(x => x.GelisZamani);
+
+                e.Property(x => x.IyziReferenceCode).HasMaxLength(64).IsRequired();
+                e.Property(x => x.OlayTipi).HasMaxLength(40);
+                e.Property(x => x.Token).HasMaxLength(128);
+                e.Property(x => x.IyzicoPaymentId).HasMaxLength(64);
+                e.Property(x => x.Durum).HasMaxLength(40);
+
+                // ⚠️ HamGovde sınırsız — imza tartışması çıkarsa gövdenin
+                // tamamı gerekir.
+            });
+
+            // Kart saklama jetonları — kart bizde durmadığı için ödemeye
+            // giden tek referans bunlar.
+            modelBuilder.Entity<Card>()
+                .Property(c => c.IyzicoCardToken).HasMaxLength(128);
+
+            modelBuilder.Entity<Card>()
+                .Property(c => c.BankaAdi).HasMaxLength(80);
+
+            modelBuilder.Entity<Card>()
+                .Property(c => c.BinNumarasi).HasMaxLength(8);
+
+            modelBuilder.Entity<User>()
+                .Property(u => u.IyzicoCardUserKey).HasMaxLength(128);
 
         }
     }

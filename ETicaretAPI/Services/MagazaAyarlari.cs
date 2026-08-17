@@ -85,6 +85,13 @@
         public int IadeGunSayisi =>
             TamSayi("IadeGunSayisi", varsayilan: 14, enAz: 7, enFazla: 365);
 
+        // ⭐ YENİ — TAKSİTİN AÇILDIĞI ALT SINIR (TL).
+        //
+        // Bu tutarın altındaki siparişlerde yalnızca tek çekim açık.
+        // 0 yazmak "her tutarda taksit" demek; geçerli bir politika.
+        public decimal TaksitAltSiniri =>
+            Ondalik("TaksitAltSiniri", varsayilan: 0m, enAz: 0m);
+
         public string SiparisNoOneki =>
             _config["Magaza:SiparisNoOneki"] ?? "SP";
 

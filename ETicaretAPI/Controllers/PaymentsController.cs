@@ -50,6 +50,68 @@ namespace ETicaretAPI.Controllers
         //  ADMIN BÖLÜMÜ
         // ==========================================================
 
+        // ⭐ YENİ — 🔴 GET /api/admin/orders/5/odeme-denemeleri
+        //
+        // Bir siparişin ödeme denemeleri. Payments tablosu para
+        // hareketlerini tutuyor, burası "iyzico ne dedi" sorusunun
+        // cevabı: taksit, fraud durumu, kart bilgisi, ham cevap.
+        [Authorize(Roles = "admin")]
+        [HttpGet("/api/admin/orders/{siparisId:int}/odeme-denemeleri")]
+        public async Task<IActionResult> GetOdemeDenemeleri(int siparisId)
+        {
+            var denemeler = await _context.OdemeIslemleri
+                .Where(o => o.OrderId == siparisId)
+                .OrderByDescending(o => o.Id)
+                .Select(o => new
+                {
+                    o.Id,
+                    o.Durum,
+                    o.ConversationId,
+                    o.IyzicoPaymentId,
+                    o.Price,
+                    o.PaidPrice,
+                    o.Taksit,
+                    o.ParaBirimi,
+                    o.FraudDurumu,
+                    o.MdStatus,
+                    o.HataKodu,
+                    o.HataMesaji,
+                    o.KartTipi,
+                    o.KartAilesi,
+                    o.BinNumarasi,
+                    o.Son4Hane,
+                    o.OlusturmaZamani,
+                    o.TamamlanmaZamani,
+
+                    // ⚠️ Ham cevap bilerek gönderiliyor: teşhis için
+                    // gereken tek yer burası. Kart numarası içermiyor —
+                    // iyzico PAN döndürmüyor.
+                    o.HamCevap,
+
+                    // Kalem kırılımı: kısmi iadenin dayandığı veri.
+                    kalemler = _context.OdemeKalemleri
+                        .Where(k => k.OdemeIslemiId == o.Id)
+                        .Select(k => new
+                        {
+                            k.OrderItemId,
+                            k.IyzicoPaymentTransactionId,
+                            k.Price,
+                            k.PaidPrice,
+                            k.IadeEdilenTutar,
+
+                            // Kargo satırında OrderItemId null.
+                            urunAdi = _context.OrderItems
+                                .Where(oi => oi.Id == k.OrderItemId)
+                                .Select(oi => oi.ProductName)
+                                .FirstOrDefault()
+                        })
+                        .ToList()
+                })
+                .ToListAsync();
+
+            return Ok(denemeler);
+        }
+
         // 🔴 GET /api/admin/payments
         //     ?search=&status=&startDate=2026-07-01&endDate=2026-07-31&page=1&pageSize=10
         [Authorize(Roles = "admin")]

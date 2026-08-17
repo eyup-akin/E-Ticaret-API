@@ -317,7 +317,12 @@ namespace ETicaretAPI.Controllers
         [HttpGet("dashboard")]
         public async Task<IActionResult> GetDashboard()
         {
-            var toplamSiparis = await _context.Orders.CountAsync();
+            // ⭐ DEĞİŞTİ — ödenmemiş siparişler sayıma girmiyor.
+            // Ödeme artık siparişten sonra alınıyor; parası hiç gelmemiş
+            // kayıtları "sipariş" saymak paneldeki sayıyı şişirirdi.
+            var toplamSiparis = await _context.Orders
+                .CountAsync(o => !OdemeDurumlari.OdenmemisSayilanlar.Contains(o.PaymentStatus));
+
             var toplamUrun = await _context.Products.CountAsync();
             var toplamMusteri = await _context.Users.CountAsync(u => u.Role == "customer");
             var toplamGelir = await _context.Payments
@@ -353,8 +358,10 @@ namespace ETicaretAPI.Controllers
                          && p.PaidAt < buAyBasi)
                 .SumAsync(p => (decimal?)p.Amount) ?? 0;
 
+            // ⭐ DEĞİŞTİ — ödenmemişler sayılmıyor (gerekçe dashboard'da).
             var buAySiparis = await _context.Orders
-                .CountAsync(o => o.CreatedAt >= buAyBasi);
+                .CountAsync(o => o.CreatedAt >= buAyBasi
+                    && !OdemeDurumlari.OdenmemisSayilanlar.Contains(o.PaymentStatus));
 
             // Geçen aya göre yüzde değişim
             decimal degisimYuzde = 0;
@@ -421,7 +428,13 @@ namespace ETicaretAPI.Controllers
             }
 
             // ---------- 3) EN ÇOK SATAN 5 ÜRÜN ----------
+            //
+            // ⭐ DEĞİŞTİ — ödenmemiş siparişlerin kalemleri sayılmıyor.
+            // Ödeme siparişten sonra alındığı için, ödenmeyecek bir
+            // sipariş "en çok satan" listesini değiştirebilirdi.
             var satisOzeti = await _context.OrderItems
+                .Where(oi => _context.Orders.Any(o => o.Id == oi.OrderId
+                    && !OdemeDurumlari.OdenmemisSayilanlar.Contains(o.PaymentStatus)))
                 .GroupBy(oi => oi.ProductId)
                 .Select(g => new
                 {

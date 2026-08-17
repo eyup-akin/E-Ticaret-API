@@ -58,6 +58,11 @@
         // maskelemenin amacını boşa çıkarırdı.
         public string? ProfilFotoUrl { get; set; }
 
+        // ⭐ YENİ — iyzico kart saklama anahtarı (kullanıcı başına).
+        // İlk "kartımı kaydet" işleminde iyzico üretir, sonra hep bu
+        // gönderilir. null = bu kullanıcının saklı kartı hiç olmadı.
+        public string? IyzicoCardUserKey { get; set; }
+
         public string? SifreSifirlamaTokenHash { get; set; }
 
         // Sıfırlama linki ne zamana kadar geçerli (1 saat vereceğiz —

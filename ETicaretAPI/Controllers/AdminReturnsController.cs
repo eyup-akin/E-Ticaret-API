@@ -33,6 +33,9 @@ namespace ETicaretAPI.Controllers
         // yaptı" cevabı yoktu.
         private readonly DenetimKaydi _denetim;
 
+        // ⭐ YENİ — iadeyi gerçekten iyzico'ya gönderen servis.
+        private readonly IadeGonderici _iadeGonderici;
+
         public AdminReturnsController(
             AppDbContext context,
             IadeHesaplayici hesap,
@@ -40,8 +43,10 @@ namespace ETicaretAPI.Controllers
             IEmailGonderici email,
             EmailSablonlari sablonlar,
             ILogger<AdminReturnsController> log,
-            DenetimKaydi denetim)
+            DenetimKaydi denetim,
+            IadeGonderici iadeGonderici)
         {
+            _iadeGonderici = iadeGonderici;
             _context = context;
             _hesap = hesap;
             _defter = defter;
@@ -340,6 +345,28 @@ namespace ETicaretAPI.Controllers
             var adminId = GetUserId();
             var paraIadeTarihi = DateTime.UtcNow;
 
+            // ⭐ YENİ — PARA GERÇEKTEN GÖNDERİLİYOR.
+            //
+            // ⚠️ TRANSACTION'DAN ÖNCE. Ters sırada yapsak iyzico
+            // reddettiğinde veritabanı "iade edildi" der ve para hiç
+            // gitmezdi. Gönderim başarısızsa aşağıdaki hiçbir şey olmuyor.
+            var gercekIade = await _iadeGonderici.GonderAsync(
+                siparis,
+                talep.OrderItemId,
+                tutar,
+                ETicaretAPI.Support.IstemciAdresi.Oku(HttpContext));
+
+            if (!gercekIade.Basarili)
+            {
+                // Hata mesajı doğrudan ekrana çıkıyor: admin ne olduğunu
+                // görmeden tekrar denerse çift iade riski var.
+                return StatusCode(502, new
+                {
+                    mesaj = "Para iadesi yapılamadı: " + gercekIade.HataMesaji,
+                    gonderilenTutar = gercekIade.GonderilenTutar
+                });
+            }
+
             // ⚠️ Stok + para + sipariş durumu tek transaction'da:
             // biri olup diğeri olmazsa kasa ile raf tutmaz.
             await using var tx = await _context.Database.BeginTransactionAsync();
@@ -437,8 +464,8 @@ namespace ETicaretAPI.Controllers
                 // ⚠️ Kısmi iadede "kismi_iade": "iade_edildi" yazmak
                 // siparişin tamamı iade edilmiş gibi gösterirdi.
                 siparis.PaymentStatus = talep.OrderItemId.HasValue
-                    ? "kismi_iade"
-                    : "iade_edildi";
+                    ? OdemeDurumlari.KismiIade
+                    : OdemeDurumlari.IadeEdildi;
 
                 // ⚠️ Order.Status değişmiyor: teslim edilmiş sipariş
                 // teslim edilmiş kalır, iade sonraki bir olay.
@@ -496,9 +523,14 @@ namespace ETicaretAPI.Controllers
 
             return Ok(new
             {
-                mesaj = "Para iadesi yapıldı.",
+                mesaj = gercekIade.Yol == IadeYolu.SaglayiciYok
+                    ? "Para iadesi kaydedildi. (Bu siparişin ödemesi sağlayıcı üzerinden alınmamış.)"
+                    : gercekIade.Yol == IadeYolu.Iptal
+                        ? "Ödeme iptal edildi, tutar müşterinin ekstresine hiç düşmeyecek."
+                        : "Para iadesi iyzico'ya gönderildi.",
                 durum = talep.Durum,
-                tutar
+                tutar,
+                iadeYolu = gercekIade.Yol.ToString()
             });
         }
 

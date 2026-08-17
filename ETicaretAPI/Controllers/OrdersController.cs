@@ -68,6 +68,13 @@ namespace ETicaretAPI.Controllers
         // ödemeyi değiştiriyor ama hiç iz bırakmıyordu.
         private readonly DenetimKaydi _denetim;
 
+        // ⭐ YENİ — ödenmemiş siparişi iptal edip stok ve kuponu geri
+        // veren servis. Süre aşımı işi de aynısını kullanıyor.
+        private readonly OdenmemisSiparisTemizleyici _temizleyici;
+
+        // ⭐ YENİ — iptal artık parayı gerçekten geri gönderiyor.
+        private readonly IadeGonderici _iadeGonderici;
+
         public OrdersController(
             AppDbContext context,
             IConfiguration config,
@@ -82,8 +89,12 @@ namespace ETicaretAPI.Controllers
             KombinServisi kombin,                         // ⭐ YENİ
             SepetEkleyici ekleyici,                       // ⭐ YENİ
             DenetimKaydi denetim,                         // ⭐ YENİ
+            OdenmemisSiparisTemizleyici temizleyici,      // ⭐ YENİ
+            IadeGonderici iadeGonderici,                  // ⭐ YENİ
             ILogger<OrdersController> log)                // ⭐ YENİ
         {
+            _temizleyici = temizleyici;                   // ⭐ YENİ
+            _iadeGonderici = iadeGonderici;               // ⭐ YENİ
             _context = context;
             _config = config;
             _kuponServisi = kuponServisi;                 // ⭐
@@ -327,6 +338,27 @@ namespace ETicaretAPI.Controllers
                 //    unique index + DbUpdateException yakalaması verir.
             }
 
+            // ⭐ YENİ — KULLANICI BAŞINA TEK BEKLEYEN SİPARİŞ.
+            //
+            // İki bekleyen sipariş stoğu iki kez rezerve eder. Yeni
+            // istek geldiğinde eskisi iptal edilip stok ve kupon geri
+            // veriliyor.
+            //
+            // ⚠️ Aşağıdaki transaction'dan ÖNCE: temizleyici kendi
+            // transaction'ını açıyor, iç içe olmaz.
+            var bekleyenler = await _context.Orders
+                .Where(o => o.UserId == userId
+                         && o.Status == SiparisDurumlari.OdemeBekliyor
+                         && o.PaymentStatus != OdemeDurumlari.Incelemede)
+                .Select(o => o.Id)
+                .ToListAsync();
+
+            foreach (var bekleyenId in bekleyenler)
+            {
+                await _temizleyici.IptalEtAsync(bekleyenId,
+                    "Yeni sipariş oluşturuldu, ödenmemiş sipariş iptal edildi.");
+            }
+
             // ⭐ YENİ (Aşama 10) — sözleşme onayı olmadan sipariş yok.
             if (!dto.SozlesmeOnayi)
             {
@@ -371,13 +403,11 @@ namespace ETicaretAPI.Controllers
                 });
             }
 
-            // 2) Kart gerçekten bu kullanıcının mı?
-            var kart = await _context.Cards
-                .FirstOrDefaultAsync(c => c.Id == dto.CardId && c.UserId == userId);
-            if (kart == null)
-            {
-                return BadRequest(new { mesaj = "Geçerli bir kart seçmelisin!" });
-            }
+            // ⛔ KART KONTROLÜ KALDIRILDI.
+            //
+            // Kartı artık iyzico'nun ödeme sayfası topluyor; sipariş
+            // anında hangi kartla ödeneceği bilinmiyor. CardLast4
+            // ödeme onaylanınca yazılıyor (OdemeSonucIsleyici).
 
             // 2b) Alıcı adını dondurmak için kullanıcı kaydını da çekiyoruz.
             //     Token'daki isim bayat olabilir — DB'deki güncel hali doğrudur.
@@ -869,9 +899,18 @@ namespace ETicaretAPI.Controllers
                     UserId = userId,
                     AddressId = dto.AddressId,
                     Total = toplamTutar,
-                    Status = SiparisDurumlari.Hazirlaniyor,
-                    PaymentStatus = "odendi",           // ödeme simüle: başarılı
-                    CardLast4 = kart.Last4Digits,       // kullanılan kartı dondur
+
+                    // ⭐ DEĞİŞTİ — sipariş ödeme onayı beklemeye başlıyor.
+                    //
+                    // Stok ve kupon burada rezerve ediliyor (müşteri 3DS
+                    // ekranındayken son ürün başkasına satılmasın), ama
+                    // para henüz alınmadı. Ödenmezse süre aşımı işi
+                    // rezervasyonu geri veriyor.
+                    Status = SiparisDurumlari.OdemeBekliyor,
+                    PaymentStatus = OdemeDurumlari.OdemeBekliyor,
+
+                    // Hangi kartla ödendiği ödeme onayında yazılıyor.
+                    CardLast4 = string.Empty,
 
                     // ⭐ ADRESİ DONDUR
                     // Müşteri yarın adresini değiştirse bile bu sipariş
@@ -1020,58 +1059,29 @@ namespace ETicaretAPI.Controllers
                     });
                 }
 
-                // 8) Ödeme kaydı oluştur (simülasyon)
-                var odeme = new Payment
-                {
-                    OrderId = siparis.Id,
-                    UserId = userId,
-                    Amount = toplamTutar,
-                    CardLast4 = kart.Last4Digits,
-                    Status = "basarili",
-                    PaidAt = DateTime.UtcNow
-                };
-                _context.Payments.Add(odeme);
+                // ⛔ 8) ÖDEME KAYDI ARTIK BURADA OLUŞMUYOR.
+                // Payment bir para hareketi defteri; para henüz
+                // çekilmedi. Kayıt ödeme onayında yazılıyor.
 
-                // 9) Sepeti temizle
-                _context.CartItems.RemoveRange(sepetOgeleri);
+                // ⛔ 9) SEPET ARTIK BURADA TEMİZLENMİYOR.
+                // Ödeme başarısız olursa müşteri hem siparişsiz hem
+                // sepetsiz kalırdı. Temizlik ödeme onayına taşındı.
 
                 await _context.SaveChangesAsync();
 
                 // 10) Her şey başarılı — transaction'ı onayla
                 await transaction.CommitAsync();
 
-                // ============================================================
-                // ⭐ YENİ — 11) SİPARİŞ ALINDI BİLDİRİMİ
+                // ⛔ SİPARİŞ ALINDI MAİLİ BURADAN KALDIRILDI.
                 //
-                // ⚠️ KONUMU KRİTİK: CommitAsync'ten SONRA.
-                //
-                // Öncesinde gönderseydik ve sonraki bir adım patlasaydı,
-                // transaction geri alınır ama MAİL GERİ ALINAMAZDI.
-                // Müşterinin elinde var olmayan bir siparişin onayı kalırdı.
-                //
-                // Kural: geri alınamaz yan etkiler, geri alınabilir olanların
-                // sonrasına konur.
-                //
-                // ⚠️ GuvenliGonderAsync kendi içinde try/catch yapıyor.
-                // Buradaki dış catch bloğu RollbackAsync çağırıyor — mail
-                // hatası oraya düşseydi, ZATEN COMMIT EDİLMİŞ bir
-                // transaction'ı geri almaya çalışırdık. O da ikinci bir
-                // istisna fırlatırdı ve asıl hata kaybolurdu.
-                //
-                // kullanici.Email'i kullanıyoruz: nesne zaten elimizde
-                // (adresi dondururken çekmiştik), ekstra sorgu yok.
-                var emailKalemleri = await EmailKalemleriGetirAsync(siparis.Id);
-
-                await _email.GuvenliGonderAsync(
-                    _log,
-                    kullanici.Email,
-                    _sablonlar.SiparisAlindi(siparis, emailKalemleri),
-                    "SiparisAlindi");
-                // ============================================================
+                // Ödeme henüz alınmadı; burada göndersek ödenmemiş ve
+                // sonra iptal edilecek siparişler için de "siparişini
+                // aldık" maili giderdi. Gönderim OdemeSonucIsleyici'ye
+                // taşındı — para gerçekten geldikten sonra.
 
                 return Ok(SiparisCevabi(
                     siparis,
-                    "Sipariş oluşturuldu ve ödeme alındı biladerim!"));
+                    "Sipariş oluşturuldu, ödemeye geçebilirsin."));
             }
 
             // ⭐ YENİ — ÇİFT SİPARİŞ: GERÇEK GARANTİ BURADA
@@ -1198,6 +1208,11 @@ namespace ETicaretAPI.Controllers
 
             return Ok(new
             {
+                // ⭐ YENİ — ödemesi tamamlanmamış siparişler.
+                // Yukarıdaki gerekçe burada da geçerli: sıfır olsa bile
+                // anahtar dönüyor, yoksa şerit sessizce eksik kalırdı.
+                odemeBekliyor = Al(SiparisDurumlari.OdemeBekliyor),
+
                 hazirlaniyor = Al(SiparisDurumlari.Hazirlaniyor),
                 kargoda = Al(SiparisDurumlari.Kargoda),
                 teslimEdildi = Al(SiparisDurumlari.TeslimEdildi),
@@ -1543,6 +1558,39 @@ namespace ETicaretAPI.Controllers
                 });
             }
 
+            // ⭐ YENİ — ÖDENMEMİŞ SİPARİŞ AYRI YOLDAN İPTAL EDİLİYOR.
+            //
+            // Aşağıdaki akış ödemeleri "iade" işaretliyor ve
+            // PaymentStatus'a "iade_edildi" yazıyor. Ödeme hiç
+            // alınmadıysa bu YANLIŞ bir iddia olur: iade raporlarına
+            // hiç olmamış bir iade düşerdi.
+            if (order.Status == SiparisDurumlari.OdemeBekliyor)
+            {
+                await _temizleyici.IptalEtAsync(order.Id, dto.Reason.Trim());
+
+                return Ok(new
+                {
+                    mesaj = "Siparişin iptal edildi. Ödeme alınmadığı için iade gerekmiyor.",
+                    durum = SiparisDurumlari.Iptal
+                });
+            }
+
+            // ⭐ YENİ — PARA GERÇEKTEN GERİ GÖNDERİLİYOR.
+            //
+            // ⚠️ Transaction'dan ÖNCE: sağlayıcı reddederse veritabanına
+            // "iade edildi" yazmıyoruz.
+            var iade = await _iadeGonderici.GonderAsync(
+                order, null, order.Total,
+                ETicaretAPI.Support.IstemciAdresi.Oku(HttpContext));
+
+            if (!iade.Basarili)
+            {
+                return StatusCode(502, new
+                {
+                    mesaj = "Sipariş iptal edilemedi, ödeme iadesi başarısız: " + iade.HataMesaji
+                });
+            }
+
             var kalemler = await _context.OrderItems
                 .Where(oi => oi.OrderId == id)
                 .ToListAsync();
@@ -1597,7 +1645,7 @@ namespace ETicaretAPI.Controllers
 
                 // 3) Siparişi iptal et + sebebi kaydet
                 order.Status = SiparisDurumlari.Iptal;
-                order.PaymentStatus = "iade_edildi";
+                order.PaymentStatus = OdemeDurumlari.IadeEdildi;
                 order.CancelReason = dto.Reason.Trim();
                 order.CancelledAt = DateTime.UtcNow;
 
@@ -1716,11 +1764,16 @@ namespace ETicaretAPI.Controllers
         // Gerçek hayatta sipariş geri gitmez: teslim edilmiş bir sipariş
         // tekrar "hazırlanıyor" olamaz. Bu kuralı burada tanımlıyoruz.
         //
-        // hazirlaniyor ──→ kargoda ──→ teslim_edildi  (son)
-        //        └──────────────┴──────→ iptal          (son)
+        // odeme_bekliyor ─→ hazirlaniyor ─→ kargoda ─→ teslim_edildi (son)
+        //        └───────────────┴──────────────┴──────→ iptal        (son)
+        //
+        // ⚠️ odeme_bekliyor → hazirlaniyor geçişini normalde ÖDEME yapıyor
+        // (OdemeSonucIsleyici). Sözlükte olması, adminin banka havalesi
+        // gibi bir durumda elle ilerletebilmesi için.
         private static readonly Dictionary<string, string[]> GecerliGecisler =
             new Dictionary<string, string[]>
             {
+                [SiparisDurumlari.OdemeBekliyor] = new[] { SiparisDurumlari.Hazirlaniyor },
                 [SiparisDurumlari.Hazirlaniyor] = new[] { SiparisDurumlari.Kargoda },
                 [SiparisDurumlari.Kargoda] = new[] { SiparisDurumlari.TeslimEdildi },
                 [SiparisDurumlari.TeslimEdildi] = Array.Empty<string>(),  // son durum
@@ -1728,8 +1781,12 @@ namespace ETicaretAPI.Controllers
             };
 
         // İptal, yalnızca bu durumlardayken yapılabilir
+        //
+        // ⭐ odeme_bekliyor eklendi: müşteri ödemeden vazgeçebilir ve
+        // 30 dakika beklemek zorunda kalmasın.
         private static readonly string[] IptalEdilebilirDurumlar =
         {
+            SiparisDurumlari.OdemeBekliyor,
             SiparisDurumlari.Hazirlaniyor,
             SiparisDurumlari.Kargoda
         };
@@ -2382,6 +2439,45 @@ namespace ETicaretAPI.Controllers
                 });
             }
 
+            // ⭐ YENİ — ödenmemiş sipariş: iade edilecek para yok.
+            // Aşağıdaki akış "iade_edildi" yazardı ve olmayan bir iadeyi
+            // raporlara sokardı.
+            if (order.Status == SiparisDurumlari.OdemeBekliyor)
+            {
+                var eskiDurumu = order.Status;
+
+                await _temizleyici.IptalEtAsync(order.Id, dto.Reason.Trim());
+
+                await _denetim.EkleAsync(
+                    yapanId: GetUserId(),
+                    hedefId: order.UserId,
+                    hedefAd: DenetimEtiketi.Siparis(order.OrderNumber),
+                    islem: DenetimIslemi.SiparisIptalAdmin,
+                    eski: eskiDurumu,
+                    yeni: $"{SiparisDurumlari.Iptal} — {dto.Reason.Trim()}");
+
+                await _context.SaveChangesAsync();
+
+                return Ok(new
+                {
+                    mesaj = "Sipariş iptal edildi ve stok geri verildi. Ödeme alınmadığı için iade yok.",
+                    durum = SiparisDurumlari.Iptal
+                });
+            }
+
+            // ⭐ YENİ — para gerçekten geri gönderiliyor (transaction'dan ÖNCE).
+            var adminIade = await _iadeGonderici.GonderAsync(
+                order, null, order.Total,
+                ETicaretAPI.Support.IstemciAdresi.Oku(HttpContext));
+
+            if (!adminIade.Basarili)
+            {
+                return StatusCode(502, new
+                {
+                    mesaj = "Sipariş iptal edilemedi, ödeme iadesi başarısız: " + adminIade.HataMesaji
+                });
+            }
+
             var kalemler = await _context.OrderItems
                 .Where(oi => oi.OrderId == id)
                 .ToListAsync();
@@ -2456,7 +2552,7 @@ namespace ETicaretAPI.Controllers
                 var eskiDurum = order.Status;
 
                 order.Status = SiparisDurumlari.Iptal;
-                order.PaymentStatus = "iade_edildi";
+                order.PaymentStatus = OdemeDurumlari.IadeEdildi;
                 order.CancelReason = dto.Reason.Trim();
                 order.CancelledAt = DateTime.UtcNow;
 
